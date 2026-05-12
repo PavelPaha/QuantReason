@@ -1,0 +1,57 @@
+# Smoke: только 2-bit GPTQ решает 4 задачи MATH500; микробатч по волне (чанки по 2).
+# Одна стадия — формат traces/judgements/metrics как в обычном прогоне.
+
+experiment_name: math500_mini_2bit_n4_batch2
+description: >
+  Demo: Qwen3-32B GPTQ 2-bit, 4 примера, staged_batch_size=2 (две генерации за вызов vLLM).
+
+benchmark:
+  name: math500
+  split: test
+  max_examples: 4
+  seed: 42
+
+staged_execution: true
+staged_unload_between_waves: true
+staged_batch_size: 2
+
+actors:
+  - actor_id: qwen3_32b_gptq2bit
+    model_id: kaitchup/Qwen3-32B-autoround-2bit-gptq
+    backend: vllm
+    precision: fp16
+    quantization: gptq
+    quantization_config:
+      bits: 2
+    backend_kwargs:
+      # Карта с максимумом свободной VRAM среди активных процессов (см. nvidia-smi).
+      cuda_visible_devices: "5"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.65
+      enable_prefix_caching: true
+    generation_params:
+      max_new_tokens: 4096
+      temperature: 0.0
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+pipeline:
+  - actor_id: qwen3_32b_gptq2bit
+    role: answer
+    handoff_mode: full_prefill
+    max_new_tokens: 4096
+    stage_prompt: ""
+    stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+    exit_conditions: []
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+
+output:
+  base_dir: results
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true

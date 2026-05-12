@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantlab"
+version = "0.1.0"
+description = "Infrastructure for hybrid-precision LLM reasoning experiments"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "datasets>=2.14",
+    "transformers>=4.40",
+    "accelerate>=0.28",
+    "torch>=2.1",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "tqdm>=4.66",
+    "rich>=13.0",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+vllm = ["vllm>=0.4.0"]
+gptq = ["auto-gptq>=0.7.0", "optimum>=1.17.0"]
+aqlm = ["aqlm>=1.0.0"]
+awq = ["autoawq>=0.2.0"]
+bnb = ["bitsandbytes>=0.43.0"]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "black>=24.0",
+    "ruff>=0.3",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+quantlab-run = "quantlab.scripts.run_experiment:main"
+quantlab-replay = "quantlab.scripts.replay_timing:main"
+quantlab-aggregate = "quantlab.scripts.aggregate_results:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["quantlab*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,86 @@
+# MATH-500 baseline: обе стадии на одной полной модели Qwen3-32B в FP16 (vLLM float16).
+# Структура пайплайна совпадает с hybrid (план → ответ), те же exit_conditions / stage_prompt / лимиты,
+# чтобы сравнение с math500_qwen_hybrid.yaml было осмысленным.
+#
+# Совпадение задач: benchmark math500, split test, seed 42, max_examples 50 — как в прогоне hybrid с --max-examples 50.
+#
+# Staged: одна карта, выгрузка между волнами (как типичный hybrid‑прогон со --staged).
+
+experiment_name: math500_qwen3_32b_fp16_plan_answer
+description: >
+  MATH-500: две стадии (план BF16-style flow, ответ), обе на Qwen3-32B FP16 — baseline против hybrid.
+
+benchmark:
+  name: math500
+  split: test
+  max_examples: 50
+  seed: 42
+
+staged_execution: true
+staged_unload_between_waves: true
+
+actors:
+  - actor_id: qwen3_32b_fp16
+    model_id: Qwen/Qwen3-32B
+    backend: vllm
+    precision: fp16
+    quantization: none
+    backend_kwargs:
+      # GPU 1 занят hybrid-пайплайном; FP16-бейзлайн на более свободной карте.
+      cuda_visible_devices: "3"
+      tensor_parallel_size: 1
+      # На shared GPU vLLM считает долю от полного объёма карты: 0.65 требовало ~91 GiB,
+      # при ~82 GiB free — EngineCore падал. Доля ≤ free/total (~0.59); 0.55 с запасом.
+      gpu_memory_utilization: 0.55
+      enable_prefix_caching: true
+    generation_params:
+      max_new_tokens: 4096
+      temperature: 0.0
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+pipeline:
+  - actor_id: qwen3_32b_fp16
+    role: plan
+    handoff_mode: full_prefill
+    max_new_tokens: 600
+    stage_prompt: |
+      Let me make a plan. I will write [PLAN_DONE] when the plan is complete.
+
+      Plan:
+    exit_conditions:
+      - name: after_marker
+        kwargs: {marker: "[PLAN_DONE]", keep_marker: false}
+      - name: after_n_tokens
+        kwargs: {n: 280}
+
+  - actor_id: qwen3_32b_fp16
+    role: answer
+    handoff_mode: full_prefill
+    max_new_tokens: 4096
+    stage_prompt: "Now let me carry out the plan step by step.\n\n"
+    stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+    exit_conditions: []
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+  - name: loop_detected
+  - name: think_closed
+  - name: commit_gap
+  - name: tokens_to_first_correct
+  - name: finish_commit
+  - name: verification_spiral
+  - name: loop_onset_tokens
+  - name: actor_token_split
+  - name: total_generation_ms
+  - name: segment_timing_ms
+  - name: tokens_per_second
+
+output:
+  base_dir: results
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true

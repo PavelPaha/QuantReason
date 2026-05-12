@@ -1,0 +1,76 @@
+# KV-cache handoff experiment: FP model prefills, quantized continues from its KV cache
+# NOTE: both actors must share the same architecture and vocabulary.
+experiment_name: kvcache_handoff_gsm8k
+description: >
+  KV-cache handoff experiment.
+  Stage 0: FP actor runs prefill and generates a short plan; returns KV cache.
+  Stage 1: Quantized actor ingests the KV cache (no re-prefill) and generates reasoning.
+  Stage 2: FP actor takes full-prefill of everything and finalizes the answer.
+
+benchmark:
+  name: gsm8k
+  split: test
+  max_examples: 50
+  seed: 42
+
+actors:
+  - actor_id: fp_actor
+    model_id: meta-llama/Llama-2-7b-hf
+    backend: transformers
+    precision: bf16
+    quantization: none
+    device_map: auto
+    generation_params:
+      max_new_tokens: 128
+      temperature: 0.0
+
+  - actor_id: quant_actor
+    model_id: meta-llama/Llama-2-7b-hf
+    backend: transformers
+    precision: bf16
+    quantization: bitsandbytes
+    quantization_config:
+      bits: 4
+      quant_type: nf4
+      double_quant: true
+      compute_dtype: bf16
+    device_map: auto
+    generation_params:
+      max_new_tokens: 512
+      temperature: 0.0
+
+pipeline:
+  # Stage 0: FP actor — plan stage, returns KV cache
+  - actor_id: fp_actor
+    exit_conditions:
+      - name: always
+    handoff_mode: full_prefill
+    role: plan
+
+  # Stage 1: quantized actor — continues from KV cache (no re-prefill)
+  - actor_id: quant_actor
+    exit_conditions:
+      - name: loop_detector
+        kwargs: {ngram_size: 5, max_repeats: 3}
+      - name: candidate_answer_appeared
+    handoff_mode: kv_cache     # ← requires same architecture
+    role: reasoning
+    loop_back_stage_index: 2
+
+  # Stage 2: FP actor — full-prefill, finalizes answer
+  - actor_id: fp_actor
+    exit_conditions: []
+    handoff_mode: full_prefill
+    role: answer
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: actor_token_split
+  - name: total_generation_ms
+  - name: segment_timing_ms
+
+output:
+  base_dir: results
+  save_traces: true
+  save_timing: true

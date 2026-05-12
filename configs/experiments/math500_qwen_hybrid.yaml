@@ -1,0 +1,107 @@
+# MATH-500: FP план → 2-bit GPTQ решает и завершает генерацию сама
+#
+# Think: промпт math500 открывает <think>. Stage 1 — без </think>
+# в stop_sequences (иначе обрежется \\boxed{} после закрытия think).
+#
+# Handoff: full_prefill. Без отдельной FP-стадии после think.
+#
+# 32B: при OOM поднимите tensor_parallel_size (часто 2–4 GPU).
+# cuda_visible_devices: одна свободная карта под staged (волны не держат две модели).
+# Подставьте id из nvidia-smi, если занята — смените (сейчас оба актёра на одной карте).
+
+experiment_name: math500_qwen3_32b_hybrid_plan_quant_finish
+description: >
+  MATH-500: FP Qwen3-32B даёт план, 2-bit GPTQ одним проходом решает задачу до конца.
+
+benchmark:
+  name: math500
+  split: test
+  max_examples: 100   # null = all 500
+  seed: 42
+
+actors:
+  - actor_id: qwen3_32b_fp
+    model_id: Qwen/Qwen3-32B
+    backend: vllm
+    precision: bf16
+    quantization: none
+    backend_kwargs:
+      cuda_visible_devices: "1"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.65
+      enable_prefix_caching: true
+    generation_params:
+      max_new_tokens: 512
+      temperature: 0.0
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+  - actor_id: qwen3_32b_gptq2bit
+    model_id: kaitchup/Qwen3-32B-autoround-2bit-gptq
+    backend: vllm
+    precision: fp16
+    quantization: gptq
+    quantization_config:
+      bits: 2
+    backend_kwargs:
+      cuda_visible_devices: "1"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.65
+      enable_prefix_caching: true
+    generation_params:
+      max_new_tokens: 4096
+      temperature: 0.0
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+pipeline:
+  - actor_id: qwen3_32b_fp
+    role: plan
+    handoff_mode: full_prefill
+    max_new_tokens: 600
+    stage_prompt: |
+      Let me make a plan. I will write [PLAN_DONE] when the plan is complete.
+
+      Plan:
+    exit_conditions:
+      - name: after_marker
+        kwargs: {marker: "[PLAN_DONE]", keep_marker: false}
+      - name: after_n_tokens
+        kwargs: {n: 280}
+
+  - actor_id: qwen3_32b_gptq2bit
+    role: answer
+    handoff_mode: full_prefill
+    max_new_tokens: 4096
+    stage_prompt: "Now let me carry out the plan step by step.\n\n"
+
+    stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+    exit_conditions: []
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+  - name: loop_detected           # предлож.: 3 подряд или ≥global_repeat без «wait/Let me check…» см. DEFAULT_GLOBAL_REPEAT_SKIP*
+  # kwargs: { global_repeat_threshold: null } | { global_repeat_skip_sentence_patterns: [] } считает и hesitation
+  - name: think_closed
+  - name: commit_gap
+  - name: tokens_to_first_correct # ~ TTFA: первое появление извлечённого верного ответа (прокси по символам)
+  - name: finish_commit           # один прогон: ответ текстом до первого \\boxed{}, и есть парсуемый box
+  - name: verification_spiral     # фразы типа „wait“, „let me check“ после первого find(predicted)
+  - name: loop_onset_tokens      # раньше: конец первого «три подряд» или момента, когда одно предложение встретилось threshold раз
+  - name: actor_token_split
+  - name: total_generation_ms
+  - name: segment_timing_ms
+  - name: tokens_per_second
+
+output:
+  base_dir: results
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true
+
+# timing_replay:
+#   enabled: true
+#   model_id: Qwen/Qwen3-32B
+#   precision: bf16

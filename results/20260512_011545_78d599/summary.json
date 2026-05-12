@@ -1,0 +1,8 @@
+{
+  "run_id": "20260512_011545_78d599",
+  "experiment_name": "math500_qwen3_32b_hybrid_plan_quant_finish",
+  "n_examples": 50,
+  "n_judged": 50,
+  "accuracy": 0.54,
+  "parse_rate": 0.66
+}

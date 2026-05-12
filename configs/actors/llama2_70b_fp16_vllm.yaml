@@ -1,0 +1,13 @@
+# Llama 2 70B — full precision BF16 via vLLM
+actor_id: llama2_70b_fp16_vllm
+model_id: meta-llama/Llama-2-70b-hf
+backend: vllm
+precision: bf16
+quantization: none
+backend_kwargs:
+  tensor_parallel_size: 4
+  gpu_memory_utilization: 0.90
+generation_params:
+  max_new_tokens: 2048
+  temperature: 0.0
+  stop_sequences: ["</s>"]

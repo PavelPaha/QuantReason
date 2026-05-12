@@ -1,0 +1,8 @@
+{
+  "run_id": "20260512_012442_a81368",
+  "experiment_name": "math500_qwen3_32b_fp16_plan_answer",
+  "n_examples": 50,
+  "n_judged": 50,
+  "accuracy": 0.36,
+  "parse_rate": 0.44
+}

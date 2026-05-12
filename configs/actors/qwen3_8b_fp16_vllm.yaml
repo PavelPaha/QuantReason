@@ -1,0 +1,14 @@
+# Qwen3-8B full precision via vLLM
+actor_id: qwen3_8b_fp
+model_id: Qwen/Qwen3-8B
+backend: vllm
+precision: bf16
+quantization: none
+backend_kwargs:
+  tensor_parallel_size: 1         # increase if needed (e.g. 2 for 2×A100)
+  gpu_memory_utilization: 0.85
+  enable_prefix_caching: true     # cuts re-prefill cost on repeated prefixes
+generation_params:
+  max_new_tokens: 512
+  temperature: 0.0
+  stop_sequences: ["<|im_end|>", "<|endoftext|>"]

@@ -1,0 +1,25 @@
+# Qwen3-8B 2-bit GPTQ via vLLM
+#
+# Model options (pick whichever you have):
+#   - Self-quantized with AutoGPTQ:
+#       python -m quantlab.tools.quantize_gptq \
+#           --model Qwen/Qwen3-8B --bits 2 --out ./models/qwen3-8b-gptq2bit
+#   - Community weights, e.g.:
+#       ModelCloud/Qwen3-8B-GPTQ-2bit  (check HuggingFace for availability)
+#
+# Replace model_id below with your actual path / HF repo.
+actor_id: qwen3_8b_gptq2bit
+model_id: ModelCloud/Qwen3-8B-GPTQ-2bit   # TODO: replace with actual model
+backend: vllm
+precision: fp16
+quantization: gptq
+quantization_config:
+  bits: 2
+backend_kwargs:
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.80
+  enable_prefix_caching: true
+generation_params:
+  max_new_tokens: 2048
+  temperature: 0.0
+  stop_sequences: ["<|im_end|>", "<|endoftext|>"]

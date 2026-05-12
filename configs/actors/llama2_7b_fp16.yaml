@@ -1,0 +1,12 @@
+# Llama 2 7B — full precision BF16 via transformers
+actor_id: llama2_7b_fp16
+model_id: meta-llama/Llama-2-7b-hf
+backend: transformers
+precision: bf16
+quantization: none
+device_map: auto
+generation_params:
+  max_new_tokens: 2048
+  temperature: 0.0
+  repetition_penalty: 1.0
+  stop_sequences: ["</s>"]

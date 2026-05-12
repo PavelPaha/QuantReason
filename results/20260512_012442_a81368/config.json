@@ -1,0 +1,151 @@
+{
+  "experiment_name": "math500_qwen3_32b_fp16_plan_answer",
+  "description": "MATH-500: \u0434\u0432\u0435 \u0441\u0442\u0430\u0434\u0438\u0438 (\u043f\u043b\u0430\u043d BF16-style flow, \u043e\u0442\u0432\u0435\u0442), \u043e\u0431\u0435 \u043d\u0430 Qwen3-32B FP16 \u2014 baseline \u043f\u0440\u043e\u0442\u0438\u0432 hybrid.\n",
+  "benchmark": {
+    "name": "math500",
+    "split": "test",
+    "subset": null,
+    "max_examples": 50,
+    "seed": 42
+  },
+  "actors": [
+    {
+      "actor_id": "qwen3_32b_fp16",
+      "model_id": "Qwen/Qwen3-32B",
+      "backend": "vllm",
+      "precision": "fp16",
+      "quantization": "none",
+      "quantization_config": {},
+      "generation_params": {
+        "max_new_tokens": 4096,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "repetition_penalty": 1.0,
+        "stop_sequences": [
+          "<|im_end|>",
+          "<|endoftext|>"
+        ],
+        "seed": null
+      },
+      "device_map": "auto",
+      "backend_kwargs": {
+        "cuda_visible_devices": "3",
+        "tensor_parallel_size": 1,
+        "gpu_memory_utilization": 0.55,
+        "enable_prefix_caching": true
+      }
+    }
+  ],
+  "pipeline": [
+    {
+      "actor_id": "qwen3_32b_fp16",
+      "exit_conditions": [
+        {
+          "name": "after_marker",
+          "kwargs": {
+            "marker": "[PLAN_DONE]",
+            "keep_marker": false
+          }
+        },
+        {
+          "name": "after_n_tokens",
+          "kwargs": {
+            "n": 280
+          }
+        }
+      ],
+      "handoff_mode": "full_prefill",
+      "max_new_tokens": 600,
+      "stop_sequences": [],
+      "role": "plan",
+      "fallback_stage_index": null,
+      "loop_back_stage_index": null,
+      "stage_prompt": "Let me make a plan. I will write [PLAN_DONE] when the plan is complete.\n\nPlan:\n"
+    },
+    {
+      "actor_id": "qwen3_32b_fp16",
+      "exit_conditions": [],
+      "handoff_mode": "full_prefill",
+      "max_new_tokens": 4096,
+      "stop_sequences": [
+        "<|im_end|>",
+        "<|endoftext|>"
+      ],
+      "role": "answer",
+      "fallback_stage_index": null,
+      "loop_back_stage_index": null,
+      "stage_prompt": "Now let me carry out the plan step by step.\n\n"
+    }
+  ],
+  "metrics": [
+    {
+      "name": "accuracy",
+      "kwargs": {}
+    },
+    {
+      "name": "parse_rate",
+      "kwargs": {}
+    },
+    {
+      "name": "reasoning_length",
+      "kwargs": {}
+    },
+    {
+      "name": "loop_detected",
+      "kwargs": {}
+    },
+    {
+      "name": "think_closed",
+      "kwargs": {}
+    },
+    {
+      "name": "commit_gap",
+      "kwargs": {}
+    },
+    {
+      "name": "tokens_to_first_correct",
+      "kwargs": {}
+    },
+    {
+      "name": "finish_commit",
+      "kwargs": {}
+    },
+    {
+      "name": "verification_spiral",
+      "kwargs": {}
+    },
+    {
+      "name": "loop_onset_tokens",
+      "kwargs": {}
+    },
+    {
+      "name": "actor_token_split",
+      "kwargs": {}
+    },
+    {
+      "name": "total_generation_ms",
+      "kwargs": {}
+    },
+    {
+      "name": "segment_timing_ms",
+      "kwargs": {}
+    },
+    {
+      "name": "tokens_per_second",
+      "kwargs": {}
+    }
+  ],
+  "output": {
+    "base_dir": "results",
+    "save_traces": true,
+    "save_raw_generations": true,
+    "save_timing": true,
+    "save_errors": true,
+    "parquet_summary": true,
+    "staged_wave_checkpoints": true
+  },
+  "staged_execution": true,
+  "staged_unload_between_waves": true,
+  "timing_replay": null
+}

@@ -1,0 +1,14 @@
+# Llama 2 70B — AQLM 2-bit quantization
+# Weights: https://huggingface.co/ISTA-DASLab/Llama-2-70b-AQLM-2Bit-1x16-hf
+actor_id: llama2_70b_aqlm
+model_id: ISTA-DASLab/Llama-2-70b-AQLM-2Bit-1x16-hf
+backend: transformers
+precision: fp16
+quantization: aqlm
+quantization_config: {}
+device_map: auto
+generation_params:
+  max_new_tokens: 2048
+  temperature: 0.0
+  repetition_penalty: 1.0
+  stop_sequences: ["</s>"]

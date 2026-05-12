@@ -1,0 +1,96 @@
+# Hybrid pipeline: FP model for plan, quantized model for reasoning, FP for answer
+# Demonstrates the key hypothesis: cheap actor does the bulk of reasoning.
+experiment_name: hybrid_fp_bnb4bit_gsm8k
+description: >
+  Hybrid pipeline on GSM8K:
+    Stage 0 (FP BF16): generate plan / initial reasoning frame (AfterMarker "Plan:")
+    Stage 1 (BNB 4-bit): bulk reasoning, switch on loop or think-closed failure
+    Stage 2 (FP BF16): finalize and produce answer
+
+benchmark:
+  name: gsm8k
+  split: test
+  max_examples: 200
+  seed: 42
+
+actors:
+  - actor_id: fp_actor
+    model_id: meta-llama/Llama-2-7b-hf
+    backend: transformers
+    precision: bf16
+    quantization: none
+    device_map: auto
+    generation_params:
+      max_new_tokens: 256
+      temperature: 0.0
+      stop_sequences: ["</s>"]
+
+  - actor_id: quant_actor
+    model_id: meta-llama/Llama-2-7b-hf
+    backend: transformers
+    precision: bf16
+    quantization: bitsandbytes
+    quantization_config:
+      bits: 4
+      quant_type: nf4
+      double_quant: true
+      compute_dtype: bf16
+    device_map: auto
+    generation_params:
+      max_new_tokens: 768
+      temperature: 0.0
+      stop_sequences: ["</s>"]
+
+pipeline:
+  # Stage 0: full-precision actor generates the plan
+  - actor_id: fp_actor
+    exit_conditions:
+      - name: after_n_tokens
+        kwargs: {n: 128}
+    handoff_mode: full_prefill
+    role: plan
+
+  # Stage 1: quantized actor does the bulk of the reasoning
+  - actor_id: quant_actor
+    exit_conditions:
+      - name: loop_detector
+        kwargs: {ngram_size: 5, max_repeats: 3}
+      - name: think_not_closed
+        kwargs: {min_tokens: 400}
+      - name: candidate_answer_appeared
+    handoff_mode: full_prefill
+    role: reasoning
+    # If loop or format failure triggers, go back to fp_actor (stage 2)
+    loop_back_stage_index: 2
+
+  # Stage 2: full-precision actor finalizes the answer
+  - actor_id: fp_actor
+    exit_conditions: []
+    handoff_mode: full_prefill
+    role: answer
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+  - name: loop_detected
+  - name: think_closed
+  - name: commit_gap
+  - name: tokens_to_first_correct
+  - name: actor_token_split
+  - name: total_generation_ms
+  - name: segment_timing_ms
+
+output:
+  base_dir: results
+  save_traces: true
+  save_timing: true
+  parquet_summary: true
+
+# Optional: replay segments through vLLM. Non-empty model_id = one backend for every segment.
+# Omit model_id in config (empty string after load) to pick model/quant_GPU per trace segment.actor_id.
+timing_replay:
+  enabled: false
+  model_id: meta-llama/Llama-2-7b-hf
+  precision: bf16
+  tensor_parallel_size: 1
