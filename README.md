@@ -56,9 +56,39 @@ cd quantlab   # корень этого репозитория
 pip install -e .
 # для экспериментов с vLLM (рекомендуется отдельное окружение)
 pip install -e ".[vllm]"
+# для логирования в Weights & Biases
+pip install -e ".[wandb]"
 ```
 
 Дополнительно под конкретные квантования: `[gptq]`, `[awq]`, `[bnb]`, `[aqlm]` — по необходимости.
+
+### Опционально: логирование в Weights & Biases
+
+В конфиг можно добавить блок:
+
+```yaml
+wandb:
+  enabled: true
+  project: quantlab
+  entity: your-team   # опционально
+  group: math500
+  tags: ["hybrid", "math500"]
+  mode: online        # или offline
+  progress_log_interval: 10
+  log_per_example_table: true
+  per_example_table_key: per_example_metrics
+  upload_run_artifact: false
+```
+
+Тогда раннер:
+
+- пишет в W&B сводные метрики по прогону;
+- ведёт progress-лог по мере обработки примеров;
+- в конце прикладывает таблицу по всем задачам (`example_id`, `experiment_name`, `run_id`,
+  judgement-поля и per-example метрики);
+- по желанию загружает всю папку прогона как artifact.
+
+Локальные артефакты в `results/<run_id>/` при этом сохраняются как раньше.
 
 ---
 

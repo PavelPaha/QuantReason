@@ -27,6 +27,7 @@ gptq = ["auto-gptq>=0.7.0", "optimum>=1.17.0"]
 aqlm = ["aqlm>=1.0.0"]
 awq = ["autoawq>=0.2.0"]
 bnb = ["bitsandbytes>=0.43.0"]
+wandb = ["wandb"]
 dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
