@@ -22,11 +22,65 @@ from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
 from quantlab.pipeline.stage import PipelineStage
 from quantlab.core.trace import Trace
 from quantlab.switching.registry import ConditionRegistry
+from quantlab.wandb_logger import WandbRunLogger
 
 
 def _unload_all_actors(actors: dict[str, Any]) -> None:
     for actor in actors.values():
         actor.unload()
+
+
+def _build_timing_data(trace: Trace) -> dict[str, Any]:
+    timing_data: dict[str, Any] = {}
+    for seg in trace.segments:
+        if seg.timing:
+            timing_data.setdefault(seg.actor_id, {})
+            t = timing_data[seg.actor_id]
+            t["total_ms"] = t.get("total_ms", 0) + (seg.timing.total_ms or 0)
+            t["token_count"] = t.get("token_count", 0) + seg.token_count
+    return timing_data
+
+
+def _build_run_summary(
+    *,
+    run_id: str,
+    config: ExperimentConfig,
+    n_examples: int,
+    judgements: list[dict[str, Any]],
+    metrics_rows: list[dict[str, Any]],
+    error_count: int,
+    output_dir: str,
+) -> dict[str, Any]:
+    nj = len(judgements)
+    summary = {
+        "run_id": run_id,
+        "experiment_name": config.experiment_name,
+        "benchmark_name": config.benchmark.name,
+        "n_examples": n_examples,
+        "n_judged": nj,
+        "n_errors": error_count,
+        "output_dir": output_dir,
+        "accuracy": (sum(1 for j in judgements if j.get("is_correct")) / nj) if nj else 0.0,
+        "parse_rate": (sum(1 for j in judgements if j.get("parse_success")) / nj) if nj else 0.0,
+    }
+
+    scalar_metrics: dict[str, list[float]] = {}
+    for row in metrics_rows:
+        for key, value in row.items():
+            if key == "example_id" or key in {"accuracy", "parse_rate"}:
+                continue
+            if isinstance(value, bool):
+                scalar_metrics.setdefault(key, []).append(int(value))
+            elif isinstance(value, (int, float)):
+                scalar_metrics.setdefault(key, []).append(value)
+
+    for metric_name, values in scalar_metrics.items():
+        if not values:
+            continue
+        summary[f"{metric_name}_mean"] = sum(values) / len(values)
+        summary[f"{metric_name}_n"] = len(values)
+
+    return summary
 
 
 def _record_example(
@@ -39,8 +93,9 @@ def _record_example(
     example,
     trace: Trace,
     verbose: bool,
-) -> tuple[bool, bool]:
-    """Persist judgement, optional trace, metrics, timing; return (is_correct, parse_success)."""
+    wandb_logger: Optional[WandbRunLogger] = None,
+) -> None:
+    """Persist judgement, trace artifacts, timing, and optional external logging."""
     judgement = judge(trace, example, adapter)
 
     if config.output.save_traces:
@@ -58,17 +113,18 @@ def _record_example(
 
     store.save_metrics(run_id, example.example_id, metric_values)
 
+    timing_data = {}
     if config.output.save_timing:
-        timing_data: dict[str, Any] = {}
-        for seg in trace.segments:
-            if seg.timing:
-                timing_data.setdefault(seg.actor_id, {})
-                t = timing_data[seg.actor_id]
-                t["total_ms"] = t.get("total_ms", 0) + (seg.timing.total_ms or 0)
-                t["token_count"] = t.get("token_count", 0) + seg.token_count
+        timing_data = _build_timing_data(trace)
         store.save_timing(run_id, example.example_id, timing_data)
 
-    return judgement.is_correct, judgement.parse_success
+    if wandb_logger is not None:
+        wandb_logger.record_example(
+            example_id=example.example_id,
+            judgement=judgement,
+            metric_values=metric_values,
+            timing_data=timing_data,
+        )
 
 
 def _build_actor_config(actor_def) -> ActorConfig:
@@ -164,6 +220,13 @@ def run_experiment(
 
     if verbose:
         print(f"[runner] run_id={run_id}  experiment={config.experiment_name}")
+
+    wandb_logger = WandbRunLogger(
+        config=config.wandb,
+        experiment_config=config,
+        run_id=run_id,
+        verbose=verbose,
+    )
 
     # Build actors
     actors = {}
@@ -268,6 +331,7 @@ def run_experiment(
                             example=example,
                             trace=traces[eida],
                             verbose=verbose,
+                            wandb_logger=wandb_logger,
                         )
                         persisted_examples.add(eida)
                     except Exception as exc:
@@ -275,6 +339,7 @@ def run_experiment(
                         if verbose:
                             print(f"[runner] ERROR persisting {eida}: {exc}")
                         store.save_error(run_id, eida, err)
+                        wandb_logger.record_error(example_id=eida, error=err, wave_index=w)
 
             def run_one_wave(i: int, example) -> None:
                 eida = example.example_id
@@ -364,6 +429,7 @@ def run_experiment(
                                 store.save_error(run_id, eida, err)
                                 failed.add(eida)
                                 traces.pop(eida, None)
+                                wandb_logger.record_error(example_id=eida, error=err, wave_index=w)
                         continue
 
                     if len(segments) != len(chunk_ex):
@@ -385,6 +451,7 @@ def run_experiment(
                             store.save_error(run_id, eida, err)
                             failed.add(eida)
                             traces.pop(eida, None)
+                            wandb_logger.record_error(example_id=eida, error=err, wave_index=w)
             else:
                 for i, example in enumerate(examples):
                     eid = example.example_id
@@ -399,6 +466,7 @@ def run_experiment(
                         store.save_error(run_id, eid, error_msg)
                         failed.add(eid)
                         traces.pop(eid, None)
+                        wandb_logger.record_error(example_id=eid, error=error_msg, wave_index=w)
 
             if (
                 config.output.save_traces
@@ -411,6 +479,12 @@ def run_experiment(
                         f"[runner] checkpoint wave {w}: "
                         f"{len(traces)} traces → trace_checkpoints/wave_{w}.jsonl"
                     )
+
+            wandb_logger.log_wave_end(
+                wave_index=w,
+                total_waves=n_stages,
+                persisted_examples=len(persisted_examples),
+            )
 
             if config.staged_unload_between_waves and w < n_stages - 1:
                 _unload_all_actors(actors)
@@ -431,6 +505,7 @@ def run_experiment(
                     example=example,
                     trace=traces[eid],
                     verbose=verbose,
+                    wandb_logger=wandb_logger,
                 )
                 persisted_examples.add(eid)
             except Exception as e:
@@ -438,6 +513,7 @@ def run_experiment(
                 if verbose:
                     print(f"[runner] ERROR on {eid}: {e}")
                 store.save_error(run_id, eid, error_msg)
+                wandb_logger.record_error(example_id=eid, error=error_msg)
 
     else:
         for i, example in enumerate(examples):
@@ -454,6 +530,7 @@ def run_experiment(
                     example=example,
                     trace=trace,
                     verbose=verbose,
+                    wandb_logger=wandb_logger,
                 )
 
             except Exception as e:
@@ -461,18 +538,21 @@ def run_experiment(
                 if verbose:
                     print(f"[runner] ERROR on {example.example_id}: {e}")
                 store.save_error(run_id, example.example_id, error_msg)
+                wandb_logger.record_error(example_id=example.example_id, error=error_msg)
 
     n = len(examples)
     all_j = store.load_judgements(run_id)
-    nj = len(all_j)
-    summary = {
-        "run_id": run_id,
-        "experiment_name": config.experiment_name,
-        "n_examples": n,
-        "n_judged": nj,
-        "accuracy": (sum(1 for j in all_j if j.get("is_correct")) / nj) if nj else 0.0,
-        "parse_rate": (sum(1 for j in all_j if j.get("parse_success")) / nj) if nj else 0.0,
-    }
+    all_metrics = store.load_metrics(run_id)
+    error_count = len(store.load_errors(run_id))
+    summary = _build_run_summary(
+        run_id=run_id,
+        config=config,
+        n_examples=n,
+        judgements=all_j,
+        metrics_rows=all_metrics,
+        error_count=error_count,
+        output_dir=str(store.run_dir(run_id)),
+    )
     store.save_summary(run_id, summary)
 
     if verbose:
@@ -481,6 +561,8 @@ def run_experiment(
     # Optional vLLM timing replay
     if config.timing_replay and config.timing_replay.enabled:
         _run_timing_replay(run_id, config, store, verbose)
+
+    wandb_logger.finish(summary=summary, run_dir=store.run_dir(run_id))
 
     return run_id
 

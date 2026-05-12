@@ -85,6 +85,23 @@ class OutputConfig(BaseModel):
     staged_wave_checkpoints: bool = True
 
 
+class WandbConfig(BaseModel):
+    enabled: bool = False
+    project: str = "quantlab"
+    entity: Optional[str] = None
+    name: Optional[str] = None
+    group: Optional[str] = None
+    job_type: str = "experiment"
+    tags: list[str] = Field(default_factory=list)
+    notes: str = ""
+    mode: str = "online"
+    progress_log_interval: int = 10
+    log_per_example_table: bool = True
+    per_example_table_key: str = "per_example_metrics"
+    upload_run_artifact: bool = False
+    artifact_name: str = "quantlab-run"
+
+
 # ── full experiment config ────────────────────────────────────────────────────
 
 class ExperimentConfig(BaseModel):
@@ -118,6 +135,7 @@ class ExperimentConfig(BaseModel):
     )
 
     output: OutputConfig = Field(default_factory=OutputConfig)
+    wandb: Optional[WandbConfig] = None
 
     # One pipeline wave at a time (stage 0 for all examples, then stage 1, …).
     # Uses full_prefill equivalence; see PipelineExecutor.run(stop_before_stage=…).
