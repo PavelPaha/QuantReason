@@ -16,6 +16,107 @@ def _normalize_table_value(value: Any) -> Any:
     return json.dumps(value, ensure_ascii=True, sort_keys=True)
 
 
+def _build_table_row(
+    *,
+    experiment_name: str,
+    benchmark_name: str,
+    run_id: str,
+    example_id: str,
+    judgement_data: dict[str, Any],
+    metric_values: dict[str, Any],
+    timing_data: dict[str, Any],
+) -> dict[str, Any]:
+    row = {
+        "experiment_name": experiment_name,
+        "run_id": run_id,
+        "benchmark_name": benchmark_name,
+        "example_id": example_id,
+        "is_correct": int(bool(judgement_data.get("is_correct"))),
+        "parse_success": int(bool(judgement_data.get("parse_success"))),
+        "predicted": judgement_data.get("predicted"),
+        "ground_truth": judgement_data.get("ground_truth"),
+    }
+    for key, value in metric_values.items():
+        if key == "example_id":
+            continue
+        row[key] = _normalize_table_value(value)
+    if timing_data:
+        normalized_timing = {k: v for k, v in timing_data.items() if k != "example_id"}
+        if normalized_timing:
+            row["timing_by_actor"] = _normalize_table_value(normalized_timing)
+    return row
+
+
+def _build_summary_log_payload(summary: dict[str, Any]) -> dict[str, float]:
+    payload: dict[str, float] = {}
+    for key, value in summary.items():
+        if isinstance(value, bool):
+            payload[f"summary/{key}"] = float(value)
+        elif isinstance(value, (int, float)):
+            payload[f"summary/{key}"] = float(value)
+    return payload
+
+
+def build_rows_from_run_directory(
+    *,
+    run_dir: Path,
+    experiment_config: ExperimentConfig,
+    run_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    judgements_path = run_dir / "judgements.jsonl"
+    metrics_path = run_dir / "metrics.jsonl"
+    timing_path = run_dir / "timing.jsonl"
+
+    judgements_by_id: dict[str, dict[str, Any]] = {}
+    metrics_by_id: dict[str, dict[str, Any]] = {}
+    timing_by_id: dict[str, dict[str, Any]] = {}
+    ordered_example_ids: list[str] = []
+
+    if judgements_path.exists():
+        for line in judgements_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            example_id = str(item["example_id"])
+            judgements_by_id[example_id] = item
+            ordered_example_ids.append(example_id)
+
+    if metrics_path.exists():
+        for line in metrics_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            metrics_by_id[str(item["example_id"])] = item
+
+    if timing_path.exists():
+        for line in timing_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            timing_by_id[str(item["example_id"])] = item
+
+    seen = set(ordered_example_ids)
+    for source in (metrics_by_id, timing_by_id):
+        for example_id in source:
+            if example_id not in seen:
+                ordered_example_ids.append(example_id)
+                seen.add(example_id)
+
+    effective_run_id = run_id or run_dir.name
+    return [
+        _build_table_row(
+            experiment_name=experiment_config.experiment_name,
+            benchmark_name=experiment_config.benchmark.name,
+            run_id=effective_run_id,
+            example_id=example_id,
+            judgement_data=judgements_by_id.get(example_id, {"example_id": example_id}),
+            metric_values=metrics_by_id.get(example_id, {}),
+            timing_data=timing_by_id.get(example_id, {}),
+        )
+        for example_id in ordered_example_ids
+    ]
+
+
 class WandbRunLogger:
     """Optional W&B logger that mirrors local artifacts with summaries and per-example tables."""
 
@@ -46,12 +147,14 @@ class WandbRunLogger:
 
         try:
             import wandb
-        except ImportError as exc:
-            raise ImportError(
-                "wandb logging is enabled in the experiment config, but the 'wandb' package "
-                "is not installed. Install it with `pip install wandb` or add the optional "
-                "dependency for this project."
-            ) from exc
+        except ImportError:
+            self.enabled = False
+            if verbose:
+                print(
+                    "[wandb] disabled: package is not installed. "
+                    "Local artifacts will still be written."
+                )
+            return
 
         self._wandb = wandb
         run_name = config.name or f"{experiment_config.experiment_name}-{run_id}"
@@ -99,21 +202,22 @@ class WandbRunLogger:
         self._correct_examples += int(judgement.is_correct)
         self._parsed_examples += int(judgement.parse_success)
 
-        row = {
-            "experiment_name": self.experiment_config.experiment_name,
-            "run_id": self.run_id,
-            "benchmark_name": self.experiment_config.benchmark.name,
-            "example_id": example_id,
-            "is_correct": int(judgement.is_correct),
-            "parse_success": int(judgement.parse_success),
-            "predicted": judgement.predicted,
-            "ground_truth": judgement.ground_truth,
-        }
-        for key, value in metric_values.items():
-            row[key] = _normalize_table_value(value)
-        if timing_data:
-            row["timing_by_actor"] = _normalize_table_value(timing_data)
-        self._rows.append(row)
+        self._rows.append(
+            _build_table_row(
+                experiment_name=self.experiment_config.experiment_name,
+                benchmark_name=self.experiment_config.benchmark.name,
+                run_id=self.run_id,
+                example_id=example_id,
+                judgement_data={
+                    "is_correct": judgement.is_correct,
+                    "parse_success": judgement.parse_success,
+                    "predicted": judgement.predicted,
+                    "ground_truth": judgement.ground_truth,
+                },
+                metric_values=metric_values,
+                timing_data=timing_data,
+            )
+        )
 
         interval = max(int(self.config.progress_log_interval), 1)
         if self._judged_examples % interval == 0:
@@ -155,11 +259,24 @@ class WandbRunLogger:
             }
         )
 
+    def load_saved_run(self, *, run_dir: Path) -> None:
+        if not self.enabled:
+            return
+        self._rows = build_rows_from_run_directory(
+            run_dir=run_dir,
+            experiment_config=self.experiment_config,
+            run_id=self.run_id,
+        )
+
     def finish(self, *, summary: dict[str, Any], run_dir: Optional[Path] = None) -> None:
         if not self.enabled:
             return
 
         assert self._run is not None
+
+        summary_payload = _build_summary_log_payload(summary)
+        if summary_payload:
+            self._log(summary_payload)
 
         for key, value in summary.items():
             self._run.summary[key] = value
