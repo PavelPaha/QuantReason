@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from quantlab.config.schema import BenchmarkConfig, ExperimentConfig, StageConfig, WandbConfig
-from quantlab.runner import _build_run_summary
+from quantlab.runner import _ProgressHeartbeat, _build_run_summary, _format_elapsed
 from quantlab.wandb_logger import (
     WandbRunLogger,
     _build_summary_log_payload,
@@ -134,3 +134,24 @@ def test_wandb_logger_disables_itself_when_dependency_is_missing(monkeypatch):
     )
 
     assert logger.enabled is False
+
+
+def test_format_elapsed_renders_minutes_and_hours():
+    assert _format_elapsed(59.9) == "00:59"
+    assert _format_elapsed(3661) == "01:01:01"
+
+
+def test_progress_heartbeat_logs_only_after_interval(monkeypatch):
+    emitted: list[str] = []
+    monotonic_values = iter([0.0, 100.0, 301.0])
+
+    monkeypatch.setattr("quantlab.runner.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("quantlab.runner._stdout_log", emitted.append)
+
+    hb = _ProgressHeartbeat(total_examples=10, interval_sec=300.0)
+    hb.maybe_log(completed_examples=1, error_count=0, current_example=2)
+    hb.maybe_log(completed_examples=3, error_count=1, current_example=4)
+
+    assert emitted == [
+        "[runner] progress done=3/10 (30.0%) errors=1 cursor=4/10 elapsed=05:01"
+    ]

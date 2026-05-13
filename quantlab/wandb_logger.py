@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -14,6 +15,11 @@ def _normalize_table_value(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
+def _stdout_log(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)
 
 
 def _build_table_row(
@@ -150,7 +156,7 @@ class WandbRunLogger:
         except ImportError:
             self.enabled = False
             if verbose:
-                print(
+                _stdout_log(
                     "[wandb] disabled: package is not installed. "
                     "Local artifacts will still be written."
                 )
@@ -182,7 +188,7 @@ class WandbRunLogger:
 
         self._run = wandb.init(**wandb_init_kwargs)
         if verbose:
-            print(
+            _stdout_log(
                 f"[wandb] initialized project={config.project!r} "
                 f"run_name={run_name!r} run_id={run_id}"
             )
@@ -236,7 +242,7 @@ class WandbRunLogger:
         if wave_index is not None:
             payload["progress/wave_index"] = wave_index
         if self.verbose:
-            print(f"[wandb] recorded error for {example_id}: {error.splitlines()[-1]}")
+            _stdout_log(f"[wandb] recorded error for {example_id}: {error.splitlines()[-1]}")
         self._log(payload)
 
     def log_wave_end(
