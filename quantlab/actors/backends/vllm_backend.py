@@ -63,6 +63,11 @@ class VLLMBackend(BackendBase):
     last token). Set ``disable_log_stats=True`` in ``backend_kwargs`` to match
     upstream ``LLM`` defaults and avoid extra stat logging (phase fields stay
     ``None``).
+
+    Most ``backend_kwargs`` are forwarded directly to ``vllm.LLM(...)``. For the
+    reserved constructor fields ``dtype`` and ``quantization``, use
+    ``backend_kwargs.dtype`` / ``backend_kwargs.quantization`` in the YAML; they
+    override the enum-derived defaults below.
     """
 
     def __init__(
@@ -72,6 +77,8 @@ class VLLMBackend(BackendBase):
         quantization: QuantizationMethod = QuantizationMethod.NONE,
         quantization_config: Optional[dict] = None,
         cuda_visible_devices: Optional[str] = None,
+        dtype_override: Any | None = None,
+        quantization_override: Any | None = None,
         **llm_kwargs: Any,
     ) -> None:
         self.model_id = model_id
@@ -79,6 +86,8 @@ class VLLMBackend(BackendBase):
         self.quantization = quantization
         self.quantization_config = quantization_config or {}
         self.cuda_visible_devices = cuda_visible_devices
+        self.dtype_override = dtype_override
+        self.quantization_override = quantization_override
         self.llm_kwargs = llm_kwargs
         self._llm = None
         self._vllm_finished_stats: list[Any] = []
@@ -93,8 +102,17 @@ class VLLMBackend(BackendBase):
 
         _prepend_executable_dir_to_path()
 
-        quant_arg = _QUANT_MAP.get(self.quantization) if self.quantization != QuantizationMethod.NONE else None
-        dtype = _DTYPE_MAP.get(self.precision, "auto")
+        quant_arg = self.quantization_override
+        if isinstance(quant_arg, str):
+            quant_arg = quant_arg.strip() or None
+        if quant_arg is None and self.quantization != QuantizationMethod.NONE:
+            quant_arg = _QUANT_MAP.get(self.quantization)
+
+        dtype = self.dtype_override
+        if isinstance(dtype, str):
+            dtype = dtype.strip() or None
+        if dtype is None:
+            dtype = _DTYPE_MAP.get(self.precision, "auto")
 
         if self.cuda_visible_devices is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(self.cuda_visible_devices).strip()

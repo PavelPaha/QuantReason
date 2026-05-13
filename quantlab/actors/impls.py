@@ -21,12 +21,16 @@ class VLLMActor(ActorBase):
         if self._backend is None:
             bk = dict(self.config.backend_kwargs)
             cuda_vis = bk.pop("cuda_visible_devices", None)
+            vllm_quantization = bk.pop("quantization", None)
+            vllm_dtype = bk.pop("dtype", None)
             self._backend = VLLMBackend(
                 model_id=self.config.model_id,
                 precision=self.config.precision,
                 quantization=self.config.quantization,
                 quantization_config=self.config.quantization_config,
                 cuda_visible_devices=cuda_vis,
+                dtype_override=vllm_dtype,
+                quantization_override=vllm_quantization,
                 **bk,
             )
         return self._backend
