@@ -83,12 +83,25 @@ wandb:
 Тогда раннер:
 
 - пишет в W&B сводные метрики по прогону;
+- дублирует числовые поля из `summary.json` в scalar-метрики `summary/*`, чтобы было удобно
+  сравнивать разные эксперименты между собой в charts / workspace;
 - ведёт progress-лог по мере обработки примеров;
 - в конце прикладывает таблицу по всем задачам (`example_id`, `experiment_name`, `run_id`,
   judgement-поля и per-example метрики);
 - по желанию загружает всю папку прогона как artifact.
 
-Локальные артефакты в `results/<run_id>/` при этом сохраняются как раньше.
+Если `wandb` не установлен или блок `wandb:` отсутствует в конфиге, локальный прогон всё равно
+отрабатывает как раньше: сохраняются обычные артефакты в `results/<run_id>/`, а внешнее
+логирование просто не используется.
+
+Уже завершённый прогон тоже можно дозалить в W&B по сохранённым артефактам:
+
+```bash
+python scripts/log_saved_run_to_wandb.py results/<run_id> --project quantlab
+# либо взять настройки из YAML с блоком wandb:
+python scripts/log_saved_run_to_wandb.py results/<run_id> \
+  --wandb-config configs/experiments/math500_qwen_hybrid.yaml
+```
 
 ---
 
