@@ -156,16 +156,17 @@ class VLLMBackend(BackendBase):
 
         _orig = lm.record
 
-        def _record(
-            scheduler_stats: Any,
-            iteration_stats: Any,
-            engine_idx: Any = None,
-        ) -> None:
+        def _record(*args: Any, **kwargs: Any) -> None:
+            iteration_stats = None
+            if len(args) >= 2:
+                iteration_stats = args[1]
+            elif "iteration_stats" in kwargs:
+                iteration_stats = kwargs["iteration_stats"]
             if iteration_stats is not None:
                 frs = getattr(iteration_stats, "finished_requests", None) or []
                 if frs:
                     self._vllm_finished_stats.extend(frs)
-            return _orig(scheduler_stats, iteration_stats, engine_idx)
+            return _orig(*args, **kwargs)
 
         lm.record = _record  # type: ignore[method-assign]
         lm._quantlab_wrapped_record = True  # type: ignore[attr-defined]

@@ -94,3 +94,24 @@ def test_vllm_actor_routes_reserved_backend_kwargs(monkeypatch):
     assert init_kwargs["quantization_override"] == "fp8"
     assert init_kwargs["dtype_override"] == "float16"
     assert init_kwargs["gpu_memory_utilization"] == 0.5
+
+
+def test_vllm_finished_stats_hook_accepts_extra_kwargs():
+    backend = VLLMBackend(model_id="org/model")
+    backend._llm = types.SimpleNamespace(
+        llm_engine=types.SimpleNamespace(
+            logger_manager=types.SimpleNamespace(record=lambda *args, **kwargs: None)
+        )
+    )
+
+    backend._install_vllm_finished_stats_hook()
+
+    iteration_stats = types.SimpleNamespace(finished_requests=["req-1"])
+    backend._llm.llm_engine.logger_manager.record(
+        None,
+        iteration_stats,
+        None,
+        mm_cache_stats={"hits": 1},
+    )
+
+    assert backend._vllm_finished_stats == ["req-1"]
