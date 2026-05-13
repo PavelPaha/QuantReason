@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from quantlab.actors.base import ActorConfig
 from quantlab.actors.registry import ActorRegistry
+from quantlab.artifacts.run_summary import build_summary
 from quantlab.artifacts.store import ArtifactStore
 from quantlab.benchmarks.registry import BenchmarkRegistry
 from quantlab.config.schema import ExperimentConfig
@@ -464,15 +465,14 @@ def run_experiment(
 
     n = len(examples)
     all_j = store.load_judgements(run_id)
-    nj = len(all_j)
-    summary = {
-        "run_id": run_id,
-        "experiment_name": config.experiment_name,
-        "n_examples": n,
-        "n_judged": nj,
-        "accuracy": (sum(1 for j in all_j if j.get("is_correct")) / nj) if nj else 0.0,
-        "parse_rate": (sum(1 for j in all_j if j.get("parse_success")) / nj) if nj else 0.0,
-    }
+    all_metrics = store.load_metrics(run_id)
+    summary = build_summary(
+        run_id=run_id,
+        experiment_name=config.experiment_name,
+        n_examples=n,
+        judgements=all_j,
+        metrics_rows=all_metrics,
+    )
     store.save_summary(run_id, summary)
 
     if verbose:
