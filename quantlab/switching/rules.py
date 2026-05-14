@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from quantlab.core.trace import Trace, TraceSegment
 from quantlab.switching.base import SwitchCondition, SwitchDecision
 
@@ -38,6 +40,41 @@ class AfterMarker(SwitchCondition):
             should_switch=True,
             split_char_offset=split_at,
             reason=f"marker={self.marker!r} found at offset {idx}",
+        )
+
+
+class AfterRegex(SwitchCondition):
+    """Switch when the generated text matches a regex pattern."""
+
+    name = "after_regex"
+
+    def __init__(
+        self,
+        pattern: str,
+        *,
+        keep_match: bool = True,
+        ignore_case: bool = False,
+        multiline: bool = False,
+    ) -> None:
+        flags = 0
+        if ignore_case:
+            flags |= re.IGNORECASE
+        if multiline:
+            flags |= re.MULTILINE
+        self.pattern = pattern
+        self.keep_match = keep_match
+        self._regex = re.compile(pattern, flags)
+
+    def evaluate(self, trace: Trace, new_segment: TraceSegment) -> SwitchDecision:
+        text = new_segment.text
+        match = self._regex.search(text)
+        if match is None:
+            return SwitchDecision(should_switch=False)
+        split_at = match.end() if self.keep_match else match.start()
+        return SwitchDecision(
+            should_switch=True,
+            split_char_offset=split_at,
+            reason=f"regex={self.pattern!r} matched at offset {match.start()}",
         )
 
 

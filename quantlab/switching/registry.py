@@ -47,6 +47,7 @@ def _register_builtins() -> None:
     mapping = {
         "after_n_tokens": rules.AfterNTokens,
         "after_marker": rules.AfterMarker,
+        "after_regex": rules.AfterRegex,
         "after_first_segment": rules.AfterFirstSegment,
         "always": rules.AlwaysSwitch,
         "never": rules.NeverSwitch,
