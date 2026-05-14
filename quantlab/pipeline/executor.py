@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Optional
 
@@ -30,8 +31,13 @@ class PipelineExecutor:
     KV-cache state is threaded through when the handoff mode is KV_CACHE —
     only consecutive stages using the *same* model can do this efficiently.
 
-    Trigger-based fallbacks (loop, format failure) are handled by routing to
-    ``stage.loop_back_stage_index`` or ``stage.fallback_stage_index``.
+    Routing:
+    - Per-condition ``target_stage_index`` (YAML) becomes ``SwitchDecision.routing_stage_index``
+      and is applied before ``loop_back_stage_index`` / ``fallback_stage_index``.
+    - ``natural_next_stage_index`` on a stage is used when the actor stops without any
+      exit condition firing (instead of ``stage_idx + 1``). Use with cyclic pipelines;
+      ``staged_execution`` in the runner cannot represent re-entering the same stage index
+      across waves, so set ``staged_execution: false`` for those configs.
     """
 
     def __init__(
@@ -137,6 +143,9 @@ class PipelineExecutor:
             stage = self.stages[stage_idx]
             actor = self._get_actor(stage.actor_id)
 
+            for cond in stage.exit_conditions:
+                cond.reset()
+
             if self.verbose:
                 _executor_log(
                     f"[executor] stage={stage_idx} actor={stage.actor_id} "
@@ -186,7 +195,16 @@ class PipelineExecutor:
                 stage_idx = next_idx
             else:
                 # Natural stop (model finished), move forward
-                stage_idx += 1
+                if stage.natural_next_stage_index is not None:
+                    ni = stage.natural_next_stage_index
+                    if ni < 0 or ni >= len(self.stages):
+                        raise ValueError(
+                            f"natural_next_stage_index={ni} out of range for "
+                            f"{len(self.stages)} pipeline stage(s)"
+                        )
+                    stage_idx = ni
+                else:
+                    stage_idx += 1
                 kv_state = None
 
             if stop_before_stage is not None and stage_idx >= stop_before_stage:
@@ -243,6 +261,9 @@ class PipelineExecutor:
 
             stage = self.stages[stage_idx]
 
+            for cond in stage.exit_conditions:
+                cond.reset()
+
             decision = self._evaluate_conditions(stage, trace, segment)
 
             if decision.should_switch and decision.split_char_offset is not None:
@@ -265,7 +286,16 @@ class PipelineExecutor:
                     break
                 stage_idx = next_idx
             else:
-                stage_idx += 1
+                if stage.natural_next_stage_index is not None:
+                    ni = stage.natural_next_stage_index
+                    if ni < 0 or ni >= len(self.stages):
+                        raise ValueError(
+                            f"natural_next_stage_index={ni} out of range for "
+                            f"{len(self.stages)} pipeline stage(s)"
+                        )
+                    stage_idx = ni
+                else:
+                    stage_idx += 1
 
             if stop_before_stage is not None and stage_idx >= stop_before_stage:
                 partial_stop = True
@@ -315,10 +345,12 @@ class PipelineExecutor:
         # Temporarily append the segment so conditions can read the full trace
         trace.segments.append(segment)
         decision = SwitchDecision(should_switch=False)
-        for cond in stage.exit_conditions:
+        targets = stage.exit_condition_targets or []
+        for i, cond in enumerate(stage.exit_conditions):
             d = cond.evaluate(trace, segment)
             if d.should_switch:
-                decision = d
+                ri = targets[i] if i < len(targets) else None
+                decision = replace(d, routing_stage_index=ri)
                 break
         trace.segments.pop()
         return decision
@@ -332,6 +364,14 @@ class PipelineExecutor:
         current_idx: int,
         decision: SwitchDecision,
     ) -> Optional[int]:
+        if decision.routing_stage_index is not None:
+            ri = decision.routing_stage_index
+            if ri < 0 or ri >= len(self.stages):
+                raise ValueError(
+                    f"target_stage_index / routing_stage_index={ri} out of range for "
+                    f"{len(self.stages)} pipeline stage(s)"
+                )
+            return ri
         if self._is_loop_trigger(stage, decision) and stage.loop_back_stage_index is not None:
             return stage.loop_back_stage_index
         if stage.fallback_stage_index is not None:

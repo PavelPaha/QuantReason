@@ -38,6 +38,9 @@ class ConditionConfig(BaseModel):
 
     name: str
     kwargs: dict[str, Any] = Field(default_factory=dict)
+    # When this condition fires, go to this pipeline stage index (0-based).
+    # If unset, routing falls back to ``StageConfig.fallback_stage_index`` or ``stage_idx + 1``.
+    target_stage_index: Optional[int] = None
 
 
 # ── pipeline stage config ─────────────────────────────────────────────────────
@@ -51,6 +54,10 @@ class StageConfig(BaseModel):
     role: str = "unknown"
     fallback_stage_index: Optional[int] = None
     loop_back_stage_index: Optional[int] = None
+    # When the actor stops without any exit_condition firing (natural completion),
+    # jump to this stage index instead of ``stage_idx + 1``. Use for cyclic pipelines
+    # where the same stage index is re-entered (must use ``staged_execution: false``).
+    natural_next_stage_index: Optional[int] = None
     # Stage-specific instruction injected into the prompt; not stored in the trace.
     stage_prompt: str = ""
 

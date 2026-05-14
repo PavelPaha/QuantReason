@@ -201,15 +201,18 @@ def _build_stage(stage_cfg, condition_registry: type = ConditionRegistry) -> Pip
         condition_registry.build(c.name, **c.kwargs)
         for c in stage_cfg.exit_conditions
     ]
+    targets = [c.target_stage_index for c in stage_cfg.exit_conditions]
     return PipelineStage(
         actor_id=stage_cfg.actor_id,
         exit_conditions=conditions,
+        exit_condition_targets=targets,
         handoff_mode=HandoffMode(stage_cfg.handoff_mode),
         max_new_tokens=stage_cfg.max_new_tokens,
         stop_sequences=stage_cfg.stop_sequences,
         role=SegmentRole(stage_cfg.role),
         fallback_stage_index=stage_cfg.fallback_stage_index,
         loop_back_stage_index=stage_cfg.loop_back_stage_index,
+        natural_next_stage_index=stage_cfg.natural_next_stage_index,
         stage_prompt=stage_cfg.stage_prompt,
     )
 

@@ -17,6 +17,9 @@ class SwitchDecision:
     split_char_offset: Optional[int] = None
     reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # If set (usually from YAML ``target_stage_index`` on the firing condition),
+    # the executor jumps here instead of ``stage_idx + 1`` / ``fallback_stage_index``.
+    routing_stage_index: Optional[int] = None
 
 
 class SwitchCondition(ABC):

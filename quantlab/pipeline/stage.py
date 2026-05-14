@@ -23,18 +23,22 @@ class PipelineStage:
         max_new_tokens: per-stage token cap (overrides actor config if set)
         stop_sequences: extra stop strings for this stage
         role: semantic role label for the generated segment
+        exit_condition_targets: parallel to exit_conditions; optional jump target per rule
         fallback_stage_index: if set, a trigger-based switch routes here instead of stage+1
         loop_back_stage_index: if set, loop detectors / format failures route here
+        natural_next_stage_index: if set, natural completion routes here instead of stage+1
     """
 
     actor_id: str
     exit_conditions: list[SwitchCondition] = field(default_factory=list)
+    exit_condition_targets: list[Optional[int]] = field(default_factory=list)
     handoff_mode: HandoffMode = HandoffMode.FULL_PREFILL
     max_new_tokens: Optional[int] = None
     stop_sequences: list[str] = field(default_factory=list)
     role: SegmentRole = SegmentRole.UNKNOWN
     fallback_stage_index: Optional[int] = None
     loop_back_stage_index: Optional[int] = None
+    natural_next_stage_index: Optional[int] = None
     # Appended to trace.full_text before calling the actor; not stored in trace.
     # Use to inject stage-specific instructions (e.g., "Create a plan:", "Solve step by step:").
     stage_prompt: str = ""
