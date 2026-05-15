@@ -36,8 +36,8 @@ class PipelineExecutor:
       and is applied before ``loop_back_stage_index`` / ``fallback_stage_index``.
     - ``natural_next_stage_index`` on a stage is used when the actor stops without any
       exit condition firing (instead of ``stage_idx + 1``). Use with cyclic pipelines;
-      ``staged_execution`` in the runner cannot represent re-entering the same stage index
-      across waves, so set ``staged_execution: false`` for those configs.
+      For cyclic pipelines with staged GPU waves, set ``staged_cyclic_loop_stage_indices``
+      in the experiment config (see runner).
     """
 
     def __init__(

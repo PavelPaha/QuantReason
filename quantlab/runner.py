@@ -21,6 +21,13 @@ from quantlab.evaluation.judge import judge
 from quantlab.metrics.base import MetricBase
 from quantlab.metrics.registry import MetricRegistry
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
+from quantlab.pipeline.staged_cyclic import (
+    cyclic_stage_for_wave,
+    iter_staged_cyclic_waves,
+    trace_in_cyclic_loop,
+    trace_needs_finalize,
+    trace_pending_stage_idx,
+)
 from quantlab.pipeline.stage import PipelineStage
 from quantlab.core.trace import Trace
 from quantlab.switching.registry import ConditionRegistry
@@ -314,6 +321,7 @@ def run_experiment(
     executor = PipelineExecutor(
         stages=stages,
         actors=actors,
+        max_total_tokens=config.pipeline_max_total_tokens,
         verbose=verbose,
     )
 
@@ -324,6 +332,28 @@ def run_experiment(
 
     if use_staged:
         n_stages = len(stages)
+        loop_stage_indices = config.staged_cyclic_loop_stage_indices
+        use_staged_cyclic = bool(loop_stage_indices)
+        plan_stage_index = config.staged_cyclic_plan_stage_index
+        finalize_stage_index = config.staged_cyclic_finalize_stage_index
+        if use_staged_cyclic:
+            if finalize_stage_index is None:
+                finalize_stage_index = n_stages - 1
+            if not loop_stage_indices:
+                raise ValueError("staged_cyclic_loop_stage_indices must be non-empty when set")
+            for idx in loop_stage_indices:
+                if idx < 0 or idx >= n_stages:
+                    raise ValueError(
+                        f"staged_cyclic_loop_stage_indices contains {idx}, "
+                        f"pipeline has {n_stages} stage(s)"
+                    )
+            if plan_stage_index < 0 or plan_stage_index >= n_stages:
+                raise ValueError(f"staged_cyclic_plan_stage_index={plan_stage_index} out of range")
+            if finalize_stage_index < 0 or finalize_stage_index >= n_stages:
+                raise ValueError(
+                    f"staged_cyclic_finalize_stage_index={finalize_stage_index} out of range"
+                )
+
         if resume_run_id is not None:
             assert resume_after_wave is not None
             ck = store.load_staged_wave_checkpoint(run_id, resume_after_wave)
@@ -333,11 +363,15 @@ def run_experiment(
                     f"empty or missing checkpoint: trace_checkpoints/"
                     f"wave_{resume_after_wave}.jsonl under {run_id}"
                 )
-            if resume_after_wave < 0 or resume_after_wave >= n_stages:
+            if not use_staged_cyclic and (
+                resume_after_wave < 0 or resume_after_wave >= n_stages
+            ):
                 raise ValueError(
                     f"resume_after_wave={resume_after_wave} out of range for "
                     f"{n_stages} pipeline stage(s)"
                 )
+            if use_staged_cyclic and resume_after_wave < 0:
+                raise ValueError(f"resume_after_wave={resume_after_wave} must be >= 0")
             wave_start = resume_after_wave + 1
             failed: set[str] = set()
             if log_verbose is not None:
@@ -353,9 +387,66 @@ def run_experiment(
         staged_bs_raw = getattr(config, "staged_batch_size", None)
         staged_bs = staged_bs_raw if staged_bs_raw is not None else 1
 
-        for w in range(wave_start, n_stages):
-            stop_before = (w + 1) if w < n_stages - 1 else None
-            stage_row = stages[w]
+        def _any_in_cyclic_loop() -> bool:
+            assert loop_stage_indices is not None
+            return any(
+                trace_in_cyclic_loop(
+                    traces[eid],
+                    loop_stage_indices=loop_stage_indices,
+                    max_total_tokens=executor.max_total_tokens,
+                )
+                for eid in traces
+                if eid not in failed
+            )
+
+        def _any_needs_finalize() -> bool:
+            return any(
+                trace_needs_finalize(traces[eid], finalize_stage_index)
+                for eid in traces
+                if eid not in failed
+            )
+
+        def _example_runnable_at_stage(eida: str, stage_idx: int) -> bool:
+            if eida in failed:
+                return False
+            if eida not in traces:
+                if use_staged_cyclic:
+                    return stage_idx == plan_stage_index
+                return stage_idx == 0
+            pending = trace_pending_stage_idx(traces[eida])
+            if pending is None:
+                return False
+            return pending == stage_idx
+
+        w = wave_start
+        while True:
+            if use_staged_cyclic:
+                assert loop_stage_indices is not None
+                if w == 0 and not traces:
+                    current_stage = plan_stage_index
+                    is_last_wave = False
+                elif _any_in_cyclic_loop():
+                    current_stage = cyclic_stage_for_wave(
+                        w,
+                        plan_stage_index=plan_stage_index,
+                        loop_stage_indices=loop_stage_indices,
+                    )
+                    is_last_wave = False
+                elif _any_needs_finalize():
+                    current_stage = finalize_stage_index
+                    is_last_wave = True
+                else:
+                    break
+                total_waves = w + (2 if _any_needs_finalize() else 1)
+            else:
+                if w >= n_stages:
+                    break
+                current_stage = w
+                is_last_wave = w == n_stages - 1
+                total_waves = n_stages
+
+            stop_before = None if is_last_wave else current_stage + 1
+            stage_row = stages[current_stage]
             wave_actor = actors[stage_row.actor_id]
 
             staged_use_vllm_batch = staged_bs >= 2
@@ -372,8 +463,17 @@ def run_experiment(
 
             def persist_final_wave(example, eida: str) -> None:
                 nonlocal error_count_so_far
+                tr = traces.get(eida)
+                if use_staged_cyclic:
+                    example_done = (
+                        tr is not None
+                        and trace_pending_stage_idx(tr) is None
+                        and tr.finished_at is not None
+                    )
+                else:
+                    example_done = is_last_wave
                 if (
-                    w == n_stages - 1
+                    example_done
                     and eida not in failed
                     and eida not in already_judged
                     and eida not in persisted_examples
@@ -397,7 +497,7 @@ def run_experiment(
                             completed_examples=len(persisted_examples) + error_count_so_far,
                             error_count=error_count_so_far,
                             current_wave=w,
-                            total_waves=n_stages,
+                            total_waves=total_waves,
                         )
                     except Exception as exc:
                         err = traceback.format_exc()
@@ -409,15 +509,20 @@ def run_experiment(
 
             def run_one_wave(i: int, example) -> None:
                 eida = example.example_id
+                if not _example_runnable_at_stage(eida, current_stage):
+                    return
                 heartbeat.maybe_log(
                     completed_examples=len(persisted_examples) + error_count_so_far,
                     error_count=error_count_so_far,
                     current_example=i + 1,
                     current_wave=w,
-                    total_waves=n_stages,
+                    total_waves=total_waves,
                 )
                 if log_verbose is not None and i % 10 == 0:
-                    log_verbose(f"[runner] staged wave {w}/{n_stages}  example {i}/{len(examples)} ...")
+                    log_verbose(
+                        f"[runner] staged wave {w} stage={current_stage}  "
+                        f"example {i}/{len(examples)} ..."
+                    )
                 if eida not in traces:
                     traces[eida] = executor.run(
                         eida, example.prompt, stop_before_stage=stop_before
@@ -430,20 +535,22 @@ def run_experiment(
 
             def run_one_wave_batched(seg_i: int, example, segment) -> None:
                 eida = example.example_id
+                if not _example_runnable_at_stage(eida, current_stage):
+                    return
                 heartbeat.maybe_log(
                     completed_examples=len(persisted_examples) + error_count_so_far,
                     error_count=error_count_so_far,
                     current_example=seg_i + 1,
                     current_wave=w,
-                    total_waves=n_stages,
+                    total_waves=total_waves,
                 )
                 if log_verbose is not None and seg_i % 10 == 0:
                     log_verbose(
-                        f"[runner] staged wave {w}/{n_stages}  example {seg_i}/{len(examples)} "
-                        f"(batch) ..."
+                        f"[runner] staged wave {w} stage={current_stage}  "
+                        f"example {seg_i}/{len(examples)} (batch) ..."
                     )
                 tr = traces[eida]
-                start_sid = _incoming_wave_stage_idx(tr, w)
+                start_sid = _incoming_wave_stage_idx(tr, current_stage)
                 executor.reset_switch_conditions_from(start_sid)
                 traces[eida] = executor.consume_segment_after_generate(
                     tr,
@@ -516,7 +623,7 @@ def run_experiment(
                                     error_count=error_count_so_far,
                                     current_example=chunk_ix[j] + 1,
                                     current_wave=w,
-                                    total_waves=n_stages,
+                                    total_waves=total_waves,
                                 )
                         continue
 
@@ -546,7 +653,7 @@ def run_experiment(
                                 error_count=error_count_so_far,
                                 current_example=chunk_ix[j] + 1,
                                 current_wave=w,
-                                total_waves=n_stages,
+                                total_waves=total_waves,
                             )
             else:
                 for i, example in enumerate(examples):
@@ -569,7 +676,7 @@ def run_experiment(
                             error_count=error_count_so_far,
                             current_example=i + 1,
                             current_wave=w,
-                            total_waves=n_stages,
+                            total_waves=total_waves,
                         )
 
             if (
@@ -587,17 +694,19 @@ def run_experiment(
                 completed_examples=len(persisted_examples) + error_count_so_far,
                 error_count=error_count_so_far,
                 current_wave=w,
-                total_waves=n_stages,
+                total_waves=total_waves,
             )
 
             wandb_logger.log_wave_end(
                 wave_index=w,
-                total_waves=n_stages,
+                total_waves=total_waves,
                 persisted_examples=len(persisted_examples),
             )
 
-            if config.staged_unload_between_waves and w < n_stages - 1:
+            if config.staged_unload_between_waves and not is_last_wave:
                 _unload_all_actors(actors)
+
+            w += 1
 
         for i, example in enumerate(examples):
             eid = example.example_id

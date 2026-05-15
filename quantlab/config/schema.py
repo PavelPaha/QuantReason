@@ -56,7 +56,7 @@ class StageConfig(BaseModel):
     loop_back_stage_index: Optional[int] = None
     # When the actor stops without any exit_condition firing (natural completion),
     # jump to this stage index instead of ``stage_idx + 1``. Use for cyclic pipelines
-    # where the same stage index is re-entered (must use ``staged_execution: false``).
+    # (non-staged, or with ``staged_cyclic_loop_stage_indices`` + staged_execution).
     natural_next_stage_index: Optional[int] = None
     # Stage-specific instruction injected into the prompt; not stored in the trace.
     stage_prompt: str = ""
@@ -144,10 +144,19 @@ class ExperimentConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     wandb: Optional[WandbConfig] = None
 
+    # Hard cap on cumulative generated tokens per example (executor stops the pipeline).
+    pipeline_max_total_tokens: int = 8192
+
     # One pipeline wave at a time (stage 0 for all examples, then stage 1, …).
     # Uses full_prefill equivalence; see PipelineExecutor.run(stop_before_stage=…).
     staged_execution: bool = False
     staged_unload_between_waves: bool = True
+    # Staged cyclic: wave 0 = plan, then alternate ``staged_cyclic_loop_stage_indices``
+    # (e.g. GPTQ answer / BF16 periodic) until ``pipeline_max_total_tokens``, then optional
+    # finalize stage. Requires ``staged_execution: true``.
+    staged_cyclic_loop_stage_indices: Optional[list[int]] = None
+    staged_cyclic_plan_stage_index: int = 0
+    staged_cyclic_finalize_stage_index: Optional[int] = None
     # If >= 2 with staged_execution: каждая волна вызывает vLLM.generate на чанках по N промптов
     # (ThroughputMode). Сегменты и traces.jsonl совпадают с одиночным режимом; тайминги в traces
     # отражают batched-сгенерённые оценки (для точных latencies используй replay_timing).
