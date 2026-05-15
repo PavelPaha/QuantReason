@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any, Optional
 
 from quantlab.actors.base import ActorBase
@@ -11,6 +12,11 @@ from quantlab.switching.base import SwitchDecision
 
 # Saved on Trace.metadata when execution pauses or completes, for staged/resumable runs.
 EXECUTOR_STATE_KEY = "_executor"
+
+
+def _executor_log(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)
 
 
 class PipelineExecutor:
@@ -132,7 +138,7 @@ class PipelineExecutor:
             actor = self._get_actor(stage.actor_id)
 
             if self.verbose:
-                print(
+                _executor_log(
                     f"[executor] stage={stage_idx} actor={stage.actor_id} "
                     f"handoff={stage.handoff_mode.value} "
                     f"total_tokens={trace.total_generated_tokens}"
@@ -163,7 +169,7 @@ class PipelineExecutor:
             # Hard total token limit
             if trace.total_generated_tokens >= self.max_total_tokens:
                 if self.verbose:
-                    print("[executor] max_total_tokens reached, stopping")
+                    _executor_log("[executor] max_total_tokens reached, stopping")
                 trace.metadata.pop(EXECUTOR_STATE_KEY, None)
                 trace.finished_at = time.time()
                 return trace
@@ -247,7 +253,7 @@ class PipelineExecutor:
 
             if trace.total_generated_tokens >= self.max_total_tokens:
                 if self.verbose:
-                    print("[executor] max_total_tokens reached, stopping")
+                    _executor_log("[executor] max_total_tokens reached, stopping")
                 trace.metadata.pop(EXECUTOR_STATE_KEY, None)
                 trace.finished_at = time.time()
                 return trace

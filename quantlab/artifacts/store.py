@@ -175,6 +175,16 @@ class ArtifactStore:
             return []
         return [json.loads(line) for line in path.read_text().splitlines()]
 
+    def load_errors(self, run_id: str) -> list[dict]:
+        path = self.base_dir / run_id / "errors.jsonl"
+        if not path.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in path.read_text().splitlines()
+            if line.strip()
+        ]
+
     def list_runs(self) -> list[str]:
         if not self.base_dir.exists():
             return []
