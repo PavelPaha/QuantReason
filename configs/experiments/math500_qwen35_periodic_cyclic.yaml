@@ -1,9 +1,8 @@
 # Plan (BF16) → GPTQ answer (N tokens) ↔ BF16 periodic (m tokens) until pipeline_max_total_tokens.
-# Non-staged: one example runs the full loop. Staged: plan wave, then alternating answer/periodic waves.
+# Three pipeline stages only — no finalize actor.
 experiment_name: math500-qwen35-periodic-cyclic-demo
 description: >
-  Demo cyclic pipeline. Set staged_execution true and staged_cyclic_loop_stage_indices [1, 2]
-  for wave-by-wave GPU execution.
+  Demo cyclic pipeline. staged_cyclic_loop_stage_indices [1, 2] + staged_execution for waves.
 
 benchmark:
   name: math500
@@ -16,7 +15,6 @@ staged_unload_between_waves: true
 pipeline_max_total_tokens: 4096
 staged_cyclic_loop_stage_indices: [1, 2]
 staged_cyclic_plan_stage_index: 0
-staged_cyclic_finalize_stage_index: 3
 
 actors:
   - actor_id: qwen35_35b_a3b_plan
@@ -64,20 +62,6 @@ actors:
       temperature: 0.6
       top_p: 0.95
 
-  - actor_id: qwen35_35b_a3b_finalize
-    model_id: Qwen/Qwen3.5-35B-A3B
-    backend: vllm
-    precision: bf16
-    backend_kwargs:
-      tensor_parallel_size: 1
-      gpu_memory_utilization: 0.90
-      max_num_seqs: 8
-      max_model_len: 8192
-    generation_params:
-      max_new_tokens: 256
-      temperature: 0.6
-      top_p: 0.95
-
 pipeline:
   - actor_id: qwen35_35b_a3b_plan
     role: plan
@@ -98,10 +82,9 @@ pipeline:
     handoff_mode: full_prefill
     max_new_tokens: 512
     stage_prompt: ""
-    natural_next_stage_index: 3
     exit_conditions:
       - name: candidate_answer_appeared
-        target_stage_index: 3
+        end_pipeline: true
       - name: max_tokens_per_stage
         kwargs: {max_tokens: 512}
         target_stage_index: 2
@@ -114,13 +97,6 @@ pipeline:
     exit_conditions:
       - name: always
         target_stage_index: 1
-
-  - actor_id: qwen35_35b_a3b_finalize
-    role: answer
-    handoff_mode: full_prefill
-    max_new_tokens: 128
-    stage_prompt: "\n\nNow I need to give the final answer."
-    exit_conditions: []
 
 metrics:
   - name: accuracy

@@ -6,7 +6,6 @@ from quantlab.core.types import HandoffMode, SegmentRole
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
 from quantlab.pipeline.staged_cyclic import (
     cyclic_stage_for_wave,
-    iter_staged_cyclic_waves,
     trace_in_cyclic_loop,
     trace_pending_stage_idx,
 )
@@ -37,7 +36,7 @@ class StubActor(ActorBase):
         return seg, None
 
 
-def _plan_answer_periodic_finalize_executor(max_total_tokens: int = 100) -> PipelineExecutor:
+def _plan_answer_periodic_executor(max_total_tokens: int = 100) -> PipelineExecutor:
     always = ConditionRegistry.build("always")
     max_tok = ConditionRegistry.build("max_tokens_per_stage", max_tokens=2)
     stages = [
@@ -62,18 +61,11 @@ def _plan_answer_periodic_finalize_executor(max_total_tokens: int = 100) -> Pipe
             handoff_mode=HandoffMode.FULL_PREFILL,
             role=SegmentRole.UNKNOWN,
         ),
-        PipelineStage(
-            actor_id="finalize",
-            exit_conditions=[],
-            handoff_mode=HandoffMode.FULL_PREFILL,
-            role=SegmentRole.UNKNOWN,
-        ),
     ]
     actors = {
         "plan": StubActor("plan", "P"),
         "answer": StubActor("answer", "A"),
         "periodic": StubActor("periodic", "V"),
-        "finalize": StubActor("finalize", "F"),
     }
     return PipelineExecutor(stages=stages, actors=actors, max_total_tokens=max_total_tokens)
 
@@ -87,45 +79,45 @@ def test_cyclic_stage_for_wave_alternates():
 
 
 def test_staged_waves_match_nonstaged_for_plan_answer_periodic_loop():
-    ex = _plan_answer_periodic_finalize_executor(max_total_tokens=8)
+    ex = _plan_answer_periodic_executor(max_total_tokens=8)
     full = ex.run("e1", "prompt:")
 
-    staged = _plan_answer_periodic_finalize_executor(max_total_tokens=8)
+    staged = _plan_answer_periodic_executor(max_total_tokens=8)
     tr = staged.run("e1", "prompt:", stop_before_stage=1)
     assert trace_pending_stage_idx(tr) == 1
 
     wave = 1
     while trace_in_cyclic_loop(tr, loop_stage_indices=[1, 2], max_total_tokens=8):
-        tr = staged.continue_run(tr, stop_before_stage=cyclic_stage_for_wave(wave, plan_stage_index=0, loop_stage_indices=[1, 2]) + 1)
+        tr = staged.continue_run(
+            tr,
+            stop_before_stage=cyclic_stage_for_wave(wave, plan_stage_index=0, loop_stage_indices=[1, 2]) + 1,
+        )
         wave += 1
-
-    if trace_pending_stage_idx(tr) == 3:
-        tr = staged.continue_run(tr, stop_before_stage=None)
 
     assert full.generated_text == tr.generated_text
     assert len(full.segments) == len(tr.segments)
 
 
 def test_pipeline_max_total_tokens_stops_executor():
-    ex = _plan_answer_periodic_finalize_executor(max_total_tokens=3)
+    ex = _plan_answer_periodic_executor(max_total_tokens=3)
     tr = ex.run("e1", "prompt:")
     assert tr.total_generated_tokens <= 3
     assert EXECUTOR_STATE_KEY not in tr.metadata or tr.finished_at is not None
 
 
-def test_iter_staged_cyclic_waves_includes_finalize():
-    traces = {
-        "e1": Trace("e1", "p", metadata={EXECUTOR_STATE_KEY: {"stage_idx": 3, "partial": True}}),
-    }
-    waves = list(
-        iter_staged_cyclic_waves(
-            wave_start=1,
-            loop_stage_indices=[1, 2],
-            plan_stage_index=0,
-            finalize_stage_index=3,
-            traces=traces,
-            failed=set(),
-            max_total_tokens=4096,
-        )
-    )
-    assert waves == [(1, 3)]
+def test_end_pipeline_on_condition():
+    boxed = ConditionRegistry.build("candidate_answer_appeared")
+    stages = [
+        PipelineStage(
+            actor_id="answer",
+            exit_conditions=[boxed],
+            exit_condition_end_pipeline=[True],
+            handoff_mode=HandoffMode.FULL_PREFILL,
+            role=SegmentRole.UNKNOWN,
+        ),
+    ]
+    actors = {"answer": StubActor("answer", "\\boxed{42}")}
+    ex = PipelineExecutor(stages=stages, actors=actors)
+    tr = ex.run("e1", "prompt:")
+    assert tr.finished_at is not None
+    assert len(tr.segments) == 1

@@ -41,6 +41,8 @@ class ConditionConfig(BaseModel):
     # When this condition fires, go to this pipeline stage index (0-based).
     # If unset, routing falls back to ``StageConfig.fallback_stage_index`` or ``stage_idx + 1``.
     target_stage_index: Optional[int] = None
+    # Stop the pipeline after this condition (no further stages / no finalize actor).
+    end_pipeline: bool = False
 
 
 # ── pipeline stage config ─────────────────────────────────────────────────────
@@ -152,11 +154,10 @@ class ExperimentConfig(BaseModel):
     staged_execution: bool = False
     staged_unload_between_waves: bool = True
     # Staged cyclic: wave 0 = plan, then alternate ``staged_cyclic_loop_stage_indices``
-    # (e.g. GPTQ answer / BF16 periodic) until ``pipeline_max_total_tokens``, then optional
-    # finalize stage. Requires ``staged_execution: true``.
+    # (e.g. GPTQ answer / BF16 periodic) until ``pipeline_max_total_tokens``.
+    # Requires ``staged_execution: true``.
     staged_cyclic_loop_stage_indices: Optional[list[int]] = None
     staged_cyclic_plan_stage_index: int = 0
-    staged_cyclic_finalize_stage_index: Optional[int] = None
     # If >= 2 with staged_execution: каждая волна вызывает vLLM.generate на чанках по N промптов
     # (ThroughputMode). Сегменты и traces.jsonl совпадают с одиночным режимом; тайминги в traces
     # отражают batched-сгенерённые оценки (для точных latencies используй replay_timing).

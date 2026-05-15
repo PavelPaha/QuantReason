@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterator, Optional
+from typing import Optional
 
 from quantlab.core.trace import Trace
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY
@@ -34,10 +34,6 @@ def trace_in_cyclic_loop(
     return trace.total_generated_tokens < max_total_tokens
 
 
-def trace_needs_finalize(trace: Trace, finalize_stage_index: int) -> bool:
-    return trace_pending_stage_idx(trace) == finalize_stage_index
-
-
 def cyclic_stage_for_wave(
     wave_index: int,
     *,
@@ -48,56 +44,3 @@ def cyclic_stage_for_wave(
     if wave_index == 0:
         return plan_stage_index
     return loop_stage_indices[(wave_index - 1) % len(loop_stage_indices)]
-
-
-def iter_staged_cyclic_waves(
-    *,
-    wave_start: int,
-    loop_stage_indices: list[int],
-    plan_stage_index: int,
-    finalize_stage_index: Optional[int],
-    traces: dict[str, Trace],
-    failed: set[str],
-    max_total_tokens: int,
-) -> Iterator[tuple[int, int]]:
-    """
-    Yield ``(wave_index, stage_index)`` for staged cyclic runs.
-
-    Stops when no trace remains in the loop stages under ``max_total_tokens``, then
-    optionally emits one finalize wave.
-    """
-    if not loop_stage_indices:
-        raise ValueError("staged_cyclic_loop_stage_indices must be non-empty")
-
-    w = wave_start
-    if w == 0:
-        yield 0, plan_stage_index
-        w = 1
-
-    while True:
-        active = [
-            t
-            for eid, t in traces.items()
-            if eid not in failed
-            and trace_in_cyclic_loop(
-                t,
-                loop_stage_indices=loop_stage_indices,
-                max_total_tokens=max_total_tokens,
-            )
-        ]
-        if not active:
-            break
-        yield w, cyclic_stage_for_wave(
-            w,
-            plan_stage_index=plan_stage_index,
-            loop_stage_indices=loop_stage_indices,
-        )
-        w += 1
-
-    if finalize_stage_index is not None:
-        needs_finalize = any(
-            eid not in failed and trace_needs_finalize(t, finalize_stage_index)
-            for eid, t in traces.items()
-        )
-        if needs_finalize:
-            yield w, finalize_stage_index

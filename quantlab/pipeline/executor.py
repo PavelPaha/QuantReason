@@ -190,6 +190,9 @@ class PipelineExecutor:
                     stage_idx = len(self.stages)
                     break
                 # If handoff mode changes or actor changes, invalidate KV state
+                if next_idx >= len(self.stages):
+                    stage_idx = next_idx
+                    break
                 if next_idx != stage_idx + 1 or self.stages[next_idx].actor_id != stage.actor_id:
                     kv_state = None
                 stage_idx = next_idx
@@ -346,10 +349,14 @@ class PipelineExecutor:
         trace.segments.append(segment)
         decision = SwitchDecision(should_switch=False)
         targets = stage.exit_condition_targets or []
+        end_flags = stage.exit_condition_end_pipeline or []
         for i, cond in enumerate(stage.exit_conditions):
             d = cond.evaluate(trace, segment)
             if d.should_switch:
-                ri = targets[i] if i < len(targets) else None
+                if i < len(end_flags) and end_flags[i]:
+                    ri = len(self.stages)
+                else:
+                    ri = targets[i] if i < len(targets) else None
                 decision = replace(d, routing_stage_index=ri)
                 break
         trace.segments.pop()
@@ -366,6 +373,8 @@ class PipelineExecutor:
     ) -> Optional[int]:
         if decision.routing_stage_index is not None:
             ri = decision.routing_stage_index
+            if ri == len(self.stages):
+                return ri
             if ri < 0 or ri >= len(self.stages):
                 raise ValueError(
                     f"target_stage_index / routing_stage_index={ri} out of range for "

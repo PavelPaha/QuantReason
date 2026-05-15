@@ -32,6 +32,8 @@ class PipelineStage:
     actor_id: str
     exit_conditions: list[SwitchCondition] = field(default_factory=list)
     exit_condition_targets: list[Optional[int]] = field(default_factory=list)
+    exit_condition_end_pipeline: list[bool] = field(default_factory=list)
+    exit_condition_end_pipeline: list[bool] = field(default_factory=list)
     handoff_mode: HandoffMode = HandoffMode.FULL_PREFILL
     max_new_tokens: Optional[int] = None
     stop_sequences: list[str] = field(default_factory=list)

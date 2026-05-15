@@ -23,9 +23,7 @@ from quantlab.metrics.registry import MetricRegistry
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
 from quantlab.pipeline.staged_cyclic import (
     cyclic_stage_for_wave,
-    iter_staged_cyclic_waves,
     trace_in_cyclic_loop,
-    trace_needs_finalize,
     trace_pending_stage_idx,
 )
 from quantlab.pipeline.stage import PipelineStage
@@ -209,10 +207,12 @@ def _build_stage(stage_cfg, condition_registry: type = ConditionRegistry) -> Pip
         for c in stage_cfg.exit_conditions
     ]
     targets = [c.target_stage_index for c in stage_cfg.exit_conditions]
+    end_pipeline_flags = [c.end_pipeline for c in stage_cfg.exit_conditions]
     return PipelineStage(
         actor_id=stage_cfg.actor_id,
         exit_conditions=conditions,
         exit_condition_targets=targets,
+        exit_condition_end_pipeline=end_pipeline_flags,
         handoff_mode=HandoffMode(stage_cfg.handoff_mode),
         max_new_tokens=stage_cfg.max_new_tokens,
         stop_sequences=stage_cfg.stop_sequences,
@@ -335,10 +335,7 @@ def run_experiment(
         loop_stage_indices = config.staged_cyclic_loop_stage_indices
         use_staged_cyclic = bool(loop_stage_indices)
         plan_stage_index = config.staged_cyclic_plan_stage_index
-        finalize_stage_index = config.staged_cyclic_finalize_stage_index
         if use_staged_cyclic:
-            if finalize_stage_index is None:
-                finalize_stage_index = n_stages - 1
             if not loop_stage_indices:
                 raise ValueError("staged_cyclic_loop_stage_indices must be non-empty when set")
             for idx in loop_stage_indices:
@@ -349,10 +346,6 @@ def run_experiment(
                     )
             if plan_stage_index < 0 or plan_stage_index >= n_stages:
                 raise ValueError(f"staged_cyclic_plan_stage_index={plan_stage_index} out of range")
-            if finalize_stage_index < 0 or finalize_stage_index >= n_stages:
-                raise ValueError(
-                    f"staged_cyclic_finalize_stage_index={finalize_stage_index} out of range"
-                )
 
         if resume_run_id is not None:
             assert resume_after_wave is not None
@@ -399,13 +392,6 @@ def run_experiment(
                 if eid not in failed
             )
 
-        def _any_needs_finalize() -> bool:
-            return any(
-                trace_needs_finalize(traces[eid], finalize_stage_index)
-                for eid in traces
-                if eid not in failed
-            )
-
         def _example_runnable_at_stage(eida: str, stage_idx: int) -> bool:
             if eida in failed:
                 return False
@@ -432,12 +418,9 @@ def run_experiment(
                         loop_stage_indices=loop_stage_indices,
                     )
                     is_last_wave = False
-                elif _any_needs_finalize():
-                    current_stage = finalize_stage_index
-                    is_last_wave = True
                 else:
                     break
-                total_waves = w + (2 if _any_needs_finalize() else 1)
+                total_waves = w + 1
             else:
                 if w >= n_stages:
                     break
