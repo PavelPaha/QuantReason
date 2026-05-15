@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import click
 import yaml
+
+
+def _stdout_log(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    click.echo(f"[{timestamp}] {message}")
 
 
 @click.command()
@@ -72,7 +78,7 @@ def main(
         resume_run_id=resume_run_id,
         resume_after_wave=resume_after_wave,
     )
-    click.echo(f"Run complete: {run_id}")
+    _stdout_log(f"Run complete: {run_id}")
 
 
 if __name__ == "__main__":

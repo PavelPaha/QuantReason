@@ -56,9 +56,52 @@ cd quantlab   # корень этого репозитория
 pip install -e .
 # для экспериментов с vLLM (рекомендуется отдельное окружение)
 pip install -e ".[vllm]"
+# для логирования в Weights & Biases
+pip install -e ".[wandb]"
 ```
 
 Дополнительно под конкретные квантования: `[gptq]`, `[awq]`, `[bnb]`, `[aqlm]` — по необходимости.
+
+### Опционально: логирование в Weights & Biases
+
+В конфиг можно добавить блок:
+
+```yaml
+wandb:
+  enabled: true
+  project: quantlab
+  entity: your-team   # опционально
+  group: math500
+  tags: ["hybrid", "math500"]
+  mode: online        # или offline
+  progress_log_interval: 10
+  log_per_example_table: true
+  per_example_table_key: per_example_metrics
+  upload_run_artifact: false
+```
+
+Тогда раннер:
+
+- пишет в W&B сводные метрики по прогону;
+- дублирует числовые поля из `summary.json` в scalar-метрики `summary/*`, чтобы было удобно
+  сравнивать разные эксперименты между собой в charts / workspace;
+- ведёт progress-лог по мере обработки примеров;
+- в конце прикладывает таблицу по всем задачам (`example_id`, `experiment_name`, `run_id`,
+  judgement-поля и per-example метрики);
+- по желанию загружает всю папку прогона как artifact.
+
+Если `wandb` не установлен или блок `wandb:` отсутствует в конфиге, локальный прогон всё равно
+отрабатывает как раньше: сохраняются обычные артефакты в `results/<run_id>/`, а внешнее
+логирование просто не используется.
+
+Уже завершённый прогон тоже можно дозалить в W&B по сохранённым артефактам:
+
+```bash
+python scripts/log_saved_run_to_wandb.py results/<run_id> --project quantlab
+# либо взять настройки из YAML с блоком wandb:
+python scripts/log_saved_run_to_wandb.py results/<run_id> \
+  --wandb-config configs/experiments/math500_qwen_hybrid.yaml
+```
 
 ---
 
