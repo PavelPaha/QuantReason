@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -12,24 +11,10 @@ from quantlab.core.trace import Trace
 from quantlab.evaluation.judge import JudgementResult
 
 
-def _slug_experiment_name(name: str, *, max_len: int = 64) -> str:
-    """Filesystem-safe readable prefix from experiment_name."""
-    s = name.strip()
-    if not s:
-        return "experiment"
-    s = re.sub(r"[^\w\-.]+", "_", s, flags=re.UNICODE)
-    s = re.sub(r"_+", "_", s).strip("_")
-    if not s:
-        return "experiment"
-    if len(s) > max_len:
-        s = s[:max_len].rstrip("_")
-    return s or "experiment"
-
-
-def _new_run_id(experiment_name: str) -> str:
-    slug = _slug_experiment_name(experiment_name)
+def _new_run_id() -> str:
+    """Timestamp-based run folder name under ``output.base_dir`` (no experiment_name prefix)."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{slug}_{ts}_{uuid.uuid4().hex[:6]}"
+    return f"{ts}_{uuid.uuid4().hex[:6]}"
 
 
 @dataclass
@@ -52,7 +37,7 @@ class ArtifactStore:
     Layout::
 
         {base_dir}/
-          {experiment_slug}_{YYYYMMDD}_{HHMMSS}_{uuid6}/
+          {YYYYMMDD}_{HHMMSS}_{uuid6}/
             config.json
             traces.jsonl
             trace_checkpoints/   # staged runs: wave_0.jsonl, wave_1.jsonl, …
@@ -67,7 +52,7 @@ class ArtifactStore:
         self.base_dir = Path(base_dir)
 
     def new_run(self, experiment_name: str, config: dict) -> str:
-        run_id = _new_run_id(experiment_name)
+        run_id = _new_run_id()
         run_dir = self.base_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "config.json").write_text(json.dumps(config, indent=2))

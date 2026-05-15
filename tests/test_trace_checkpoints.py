@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 
 from quantlab.artifacts.store import ArtifactStore
 from quantlab.core.trace import Trace, TraceSegment
 from quantlab.evaluation.judge import JudgementResult
+
+
+def test_new_run_id_is_timestamp_only():
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("my-long-experiment-name", {"experiment_name": "my-long-experiment-name"})
+        assert "my-long-experiment-name" not in run_id
+        assert re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{6}", run_id)
+        assert (Path(td) / run_id / "config.json").exists()
 
 
 def test_staged_wave_checkpoint_roundtrip():
