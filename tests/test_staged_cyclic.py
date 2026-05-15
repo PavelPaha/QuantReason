@@ -7,6 +7,7 @@ from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
 from quantlab.pipeline.staged_cyclic import (
     cyclic_stage_for_wave,
     trace_in_cyclic_loop,
+    trace_loop_generated_tokens,
     trace_pending_stage_idx,
 )
 from quantlab.pipeline.stage import PipelineStage
@@ -86,8 +87,14 @@ def test_staged_waves_match_nonstaged_for_plan_answer_periodic_loop():
     tr = staged.run("e1", "prompt:", stop_before_stage=1)
     assert trace_pending_stage_idx(tr) == 1
 
+    loop_actors = {"answer", "periodic"}
     wave = 1
-    while trace_in_cyclic_loop(tr, loop_stage_indices=[1, 2], max_total_tokens=8):
+    while trace_in_cyclic_loop(
+        tr,
+        loop_stage_indices=[1, 2],
+        loop_actor_ids=loop_actors,
+        max_total_tokens=8,
+    ):
         tr = staged.continue_run(
             tr,
             stop_before_stage=cyclic_stage_for_wave(wave, plan_stage_index=0, loop_stage_indices=[1, 2]) + 1,
@@ -103,6 +110,24 @@ def test_pipeline_max_total_tokens_stops_executor():
     tr = ex.run("e1", "prompt:")
     assert tr.total_generated_tokens <= 3
     assert EXECUTOR_STATE_KEY not in tr.metadata or tr.finished_at is not None
+
+
+def test_pipeline_max_loop_tokens_excludes_plan():
+    loop_actors = frozenset({"answer", "periodic"})
+    ex = PipelineExecutor(
+        stages=_plan_answer_periodic_executor(max_total_tokens=100).stages,
+        actors={
+            "plan": StubActor("plan", "P"),
+            "answer": StubActor("answer", "A"),
+            "periodic": StubActor("periodic", "V"),
+        },
+        max_total_tokens=100,
+        max_loop_tokens=2,
+        loop_actor_ids=loop_actors,
+    )
+    tr = ex.run("e1", "prompt:")
+    assert trace_loop_generated_tokens(tr, set(loop_actors)) <= 2
+    assert tr.total_generated_tokens > 2  # plan segment counts separately
 
 
 def test_end_pipeline_on_condition():

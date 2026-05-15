@@ -318,10 +318,22 @@ def run_experiment(
     _stdout_log(f"[runner] loaded {len(examples)} examples from {config.benchmark.name}")
     heartbeat = _ProgressHeartbeat(total_examples=len(examples))
 
+    loop_stage_indices = config.staged_cyclic_loop_stage_indices
+    loop_actor_ids = frozenset(
+        config.pipeline[i].actor_id for i in (loop_stage_indices or [])
+    )
+    if config.pipeline_max_loop_tokens is not None and not loop_actor_ids:
+        raise ValueError(
+            "pipeline_max_loop_tokens requires staged_cyclic_loop_stage_indices "
+            "so loop-stage actors are known"
+        )
+
     executor = PipelineExecutor(
         stages=stages,
         actors=actors,
         max_total_tokens=config.pipeline_max_total_tokens,
+        max_loop_tokens=config.pipeline_max_loop_tokens,
+        loop_actor_ids=loop_actor_ids,
         verbose=verbose,
     )
 
@@ -332,7 +344,6 @@ def run_experiment(
 
     if use_staged:
         n_stages = len(stages)
-        loop_stage_indices = config.staged_cyclic_loop_stage_indices
         use_staged_cyclic = bool(loop_stage_indices)
         plan_stage_index = config.staged_cyclic_plan_stage_index
         if use_staged_cyclic:
@@ -386,7 +397,9 @@ def run_experiment(
                 trace_in_cyclic_loop(
                     traces[eid],
                     loop_stage_indices=loop_stage_indices,
+                    loop_actor_ids=set(executor.loop_actor_ids),
                     max_total_tokens=executor.max_total_tokens,
+                    max_loop_tokens=executor.max_loop_tokens,
                 )
                 for eid in traces
                 if eid not in failed

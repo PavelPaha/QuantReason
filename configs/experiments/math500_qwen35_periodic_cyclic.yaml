@@ -12,7 +12,7 @@ benchmark:
 
 staged_execution: false
 staged_unload_between_waves: true
-pipeline_max_total_tokens: 4096
+pipeline_max_loop_tokens: 4096
 staged_cyclic_loop_stage_indices: [1, 2]
 staged_cyclic_plan_stage_index: 0
 

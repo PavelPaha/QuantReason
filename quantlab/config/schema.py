@@ -146,15 +146,18 @@ class ExperimentConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     wandb: Optional[WandbConfig] = None
 
-    # Hard cap on cumulative generated tokens per example (executor stops the pipeline).
+    # Hard cap on all generated tokens per example (plan + loop stages), default 8192.
     pipeline_max_total_tokens: int = 8192
+    # Cap on tokens from cyclic loop stages only (``staged_cyclic_loop_stage_indices`` actors).
+    # Plan / other stages are not counted. If unset, only ``pipeline_max_total_tokens`` applies.
+    pipeline_max_loop_tokens: Optional[int] = None
 
     # One pipeline wave at a time (stage 0 for all examples, then stage 1, …).
     # Uses full_prefill equivalence; see PipelineExecutor.run(stop_before_stage=…).
     staged_execution: bool = False
     staged_unload_between_waves: bool = True
     # Staged cyclic: wave 0 = plan, then alternate ``staged_cyclic_loop_stage_indices``
-    # (e.g. GPTQ answer / BF16 periodic) until ``pipeline_max_total_tokens``.
+    # (e.g. GPTQ answer / BF16 periodic) until ``pipeline_max_loop_tokens`` (or total cap).
     # Requires ``staged_execution: true``.
     staged_cyclic_loop_stage_indices: Optional[list[int]] = None
     staged_cyclic_plan_stage_index: int = 0

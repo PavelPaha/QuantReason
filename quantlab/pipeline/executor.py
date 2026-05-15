@@ -45,11 +45,15 @@ class PipelineExecutor:
         stages: list[PipelineStage],
         actors: dict[str, ActorBase],
         max_total_tokens: int = 8192,
+        max_loop_tokens: Optional[int] = None,
+        loop_actor_ids: Optional[frozenset[str]] = None,
         verbose: bool = False,
     ) -> None:
         self.stages = stages
         self.actors = actors
         self.max_total_tokens = max_total_tokens
+        self.max_loop_tokens = max_loop_tokens
+        self.loop_actor_ids = loop_actor_ids or frozenset()
         self.verbose = verbose
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -175,10 +179,9 @@ class PipelineExecutor:
             else:
                 trace.append_segment(segment)
 
-            # Hard total token limit
-            if trace.total_generated_tokens >= self.max_total_tokens:
+            if self._pipeline_token_limit_reached(trace):
                 if self.verbose:
-                    _executor_log("[executor] max_total_tokens reached, stopping")
+                    _executor_log("[executor] token limit reached, stopping")
                 trace.metadata.pop(EXECUTOR_STATE_KEY, None)
                 trace.finished_at = time.time()
                 return trace
@@ -275,9 +278,9 @@ class PipelineExecutor:
             else:
                 trace.append_segment(segment)
 
-            if trace.total_generated_tokens >= self.max_total_tokens:
+            if self._pipeline_token_limit_reached(trace):
                 if self.verbose:
-                    _executor_log("[executor] max_total_tokens reached, stopping")
+                    _executor_log("[executor] token limit reached, stopping")
                 trace.metadata.pop(EXECUTOR_STATE_KEY, None)
                 trace.finished_at = time.time()
                 return trace
@@ -323,6 +326,15 @@ class PipelineExecutor:
         """Clear stateful switch conditions from ``from_stage_idx`` onward (resume / batched staged)."""
 
         self._reset_conditions(from_stage_idx)
+
+    def _pipeline_token_limit_reached(self, trace: Trace) -> bool:
+        if trace.total_generated_tokens >= self.max_total_tokens:
+            return True
+        if self.max_loop_tokens is None or not self.loop_actor_ids:
+            return False
+        from quantlab.pipeline.staged_cyclic import trace_loop_generated_tokens
+
+        return trace_loop_generated_tokens(trace, set(self.loop_actor_ids)) >= self.max_loop_tokens
 
     def _reset_conditions(self, from_stage_idx: int = 0) -> None:
         for i, stage in enumerate(self.stages):
