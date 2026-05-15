@@ -156,10 +156,11 @@ class ExperimentConfig(BaseModel):
     # Uses full_prefill equivalence; see PipelineExecutor.run(stop_before_stage=…).
     staged_execution: bool = False
     staged_unload_between_waves: bool = True
-    # Staged cyclic: wave 0 = plan, then alternate ``staged_cyclic_loop_stage_indices``
-    # (e.g. GPTQ answer / BF16 periodic) until ``pipeline_max_loop_tokens`` (or total cap).
+    # Staged cyclic: wave 0 = plan, optional ``staged_cyclic_preface_stage_indices`` (once each),
+    # then alternate ``staged_cyclic_loop_stage_indices`` until ``pipeline_max_loop_tokens``.
     # Requires ``staged_execution: true``.
     staged_cyclic_loop_stage_indices: Optional[list[int]] = None
+    staged_cyclic_preface_stage_indices: Optional[list[int]] = None
     staged_cyclic_plan_stage_index: int = 0
     # If >= 2 with staged_execution: каждая волна вызывает vLLM.generate на чанках по N промптов
     # (ThroughputMode). Сегменты и traces.jsonl совпадают с одиночным режимом; тайминги в traces

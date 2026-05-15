@@ -23,7 +23,6 @@ from quantlab.metrics.registry import MetricRegistry
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
 from quantlab.pipeline.staged_cyclic import (
     cyclic_stage_for_wave,
-    trace_in_cyclic_loop,
     trace_pending_stage_idx,
 )
 from quantlab.pipeline.stage import PipelineStage
@@ -319,6 +318,7 @@ def run_experiment(
     heartbeat = _ProgressHeartbeat(total_examples=len(examples))
 
     loop_stage_indices = config.staged_cyclic_loop_stage_indices
+    preface_stage_indices = config.staged_cyclic_preface_stage_indices or []
     loop_actor_ids = frozenset(
         config.pipeline[i].actor_id for i in (loop_stage_indices or [])
     )
@@ -357,6 +357,22 @@ def run_experiment(
                     )
             if plan_stage_index < 0 or plan_stage_index >= n_stages:
                 raise ValueError(f"staged_cyclic_plan_stage_index={plan_stage_index} out of range")
+            for idx in preface_stage_indices:
+                if idx < 0 or idx >= n_stages:
+                    raise ValueError(
+                        f"staged_cyclic_preface_stage_indices contains {idx}, "
+                        f"pipeline has {n_stages} stage(s)"
+                    )
+                if idx == plan_stage_index:
+                    raise ValueError(
+                        f"staged_cyclic_preface_stage_indices must not include "
+                        f"plan stage {plan_stage_index}"
+                    )
+                if idx in loop_stage_indices:
+                    raise ValueError(
+                        f"staged_cyclic_preface_stage_indices contains {idx}, "
+                        "which is also listed in staged_cyclic_loop_stage_indices"
+                    )
 
         if resume_run_id is not None:
             assert resume_after_wave is not None
@@ -391,19 +407,16 @@ def run_experiment(
         staged_bs_raw = getattr(config, "staged_batch_size", None)
         staged_bs = staged_bs_raw if staged_bs_raw is not None else 1
 
-        def _any_in_cyclic_loop() -> bool:
-            assert loop_stage_indices is not None
-            return any(
-                trace_in_cyclic_loop(
-                    traces[eid],
-                    loop_stage_indices=loop_stage_indices,
-                    loop_actor_ids=set(executor.loop_actor_ids),
-                    max_total_tokens=executor.max_total_tokens,
-                    max_loop_tokens=executor.max_loop_tokens,
-                )
-                for eid in traces
-                if eid not in failed
-            )
+        def _any_unfinished_trace() -> bool:
+            for example in examples:
+                eid = example.example_id
+                if eid in failed:
+                    continue
+                if eid not in traces:
+                    return True
+                if traces[eid].finished_at is None:
+                    return True
+            return False
 
         def _example_runnable_at_stage(eida: str, stage_idx: int) -> bool:
             if eida in failed:
@@ -431,11 +444,12 @@ def run_experiment(
                 if w == 0 and not traces:
                     current_stage = plan_stage_index
                     is_last_wave = False
-                elif _any_in_cyclic_loop():
+                elif _any_unfinished_trace():
                     current_stage = cyclic_stage_for_wave(
                         w,
                         plan_stage_index=plan_stage_index,
                         loop_stage_indices=loop_stage_indices,
+                        preface_stage_indices=preface_stage_indices,
                     )
                     is_last_wave = False
                 else:

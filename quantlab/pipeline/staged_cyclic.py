@@ -50,8 +50,18 @@ def cyclic_stage_for_wave(
     *,
     plan_stage_index: int,
     loop_stage_indices: list[int],
+    preface_stage_indices: Optional[list[int]] = None,
 ) -> int:
-    """Map staged wave number to pipeline stage index (plan once, then loop alternation)."""
+    """Map staged wave number to pipeline stage index.
+
+    Wave 0 = plan, then optional one-shot preface stages (e.g. GPTQ bootstrap with a
+    stage prompt), then cyclic alternation over ``loop_stage_indices``.
+    """
+    preface = preface_stage_indices or []
     if wave_index == 0:
         return plan_stage_index
-    return loop_stage_indices[(wave_index - 1) % len(loop_stage_indices)]
+    offset = wave_index - 1
+    if offset < len(preface):
+        return preface[offset]
+    loop_offset = offset - len(preface)
+    return loop_stage_indices[loop_offset % len(loop_stage_indices)]

@@ -79,6 +79,55 @@ def test_cyclic_stage_for_wave_alternates():
     assert cyclic_stage_for_wave(3, plan_stage_index=0, loop_stage_indices=loop) == 1
 
 
+def test_cyclic_stage_for_wave_plan_preface_then_loop():
+    """Plan → GPTQ bootstrap (preface) → BF16 ↔ GPTQ loop."""
+    assert (
+        cyclic_stage_for_wave(
+            0,
+            plan_stage_index=0,
+            preface_stage_indices=[1],
+            loop_stage_indices=[2, 3],
+        )
+        == 0
+    )
+    assert (
+        cyclic_stage_for_wave(
+            1,
+            plan_stage_index=0,
+            preface_stage_indices=[1],
+            loop_stage_indices=[2, 3],
+        )
+        == 1
+    )
+    assert (
+        cyclic_stage_for_wave(
+            2,
+            plan_stage_index=0,
+            preface_stage_indices=[1],
+            loop_stage_indices=[2, 3],
+        )
+        == 2
+    )
+    assert (
+        cyclic_stage_for_wave(
+            3,
+            plan_stage_index=0,
+            preface_stage_indices=[1],
+            loop_stage_indices=[2, 3],
+        )
+        == 3
+    )
+    assert (
+        cyclic_stage_for_wave(
+            4,
+            plan_stage_index=0,
+            preface_stage_indices=[1],
+            loop_stage_indices=[2, 3],
+        )
+        == 2
+    )
+
+
 def test_staged_waves_match_nonstaged_for_plan_answer_periodic_loop():
     ex = _plan_answer_periodic_executor(max_total_tokens=8)
     full = ex.run("e1", "prompt:")
