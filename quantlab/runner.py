@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from quantlab.actors.base import ActorConfig
 from quantlab.actors.registry import ActorRegistry
+from quantlab.artifacts.run_summary import build_summary
 from quantlab.artifacts.store import ArtifactStore
 from quantlab.benchmarks.registry import BenchmarkRegistry
 from quantlab.config.schema import ExperimentConfig

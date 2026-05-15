@@ -1,0 +1,54 @@
+experiment_name: math500_qwen3_32b_fp16_single_stage_32768
+description: >
+  MATH-500: single-stage, 32768 max_new_tokens — просто спрашиваем модель и она отвечает.
+
+benchmark:
+  name: math500
+  split: test
+  max_examples: 50
+  seed: 67
+
+staged_execution: true
+staged_unload_between_waves: false
+staged_batch_size: 500
+
+actors:
+  - actor_id: qwen3_32b_fp16
+    model_id: Qwen/Qwen3-32B
+    backend: vllm
+    precision: fp16
+    quantization: none
+    backend_kwargs:
+      cuda_visible_devices: "7"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.55
+      enable_prefix_caching: true
+    generation_params:
+      max_new_tokens: 32768
+      seed: 67
+      temperature: 0.0
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+pipeline:
+  - actor_id: qwen3_32b_fp16
+    role: answer
+    handoff_mode: full_prefill
+    max_new_tokens: 32768
+    stage_prompt: ""
+    stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+    exit_conditions: []
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+  - name: total_generation_ms
+  - name: tokens_per_second
+
+output:
+  base_dir: results
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true

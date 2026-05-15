@@ -1,0 +1,18 @@
+---
+description: Перед запуском экспериментов — GPU и conda/Python окружение (vLLM)
+alwaysApply: true
+---
+
+# GPU и окружение перед запусками QuantLab
+
+Перед тем как запускать `scripts/run_experiment.py`, долгие прогоны или `nohup`:
+
+1. **GPU** — выполнить `nvidia-smi` (или `--query-gpu=index,memory.free,memory.used,utilization.gpu`) и выбрать карту с **достаточной свободной VRAM** и приемлемой загрузкой. При необходимости выставить в YAML актёров `backend_kwargs.cuda_visible_devices` под выбранный индекс. Если на карте уже висят чужие процессы, **снизить** `gpu_memory_utilization` в `backend_kwargs` (иначе vLLM: «Free memory … less than desired GPU memory utilization»).
+
+2. **Python / vLLM** — не полагаться на `python` из PATH в этом окружении. Для backend `vllm` заранее проверить импорт:  
+   `/data/users/alimaskina/miniconda3/envs/areal/bin/python -c "import vllm"`  
+   Запускать эксперименты этим интерпретатором (или после `conda activate areal`), если только явно не указано другое окружение.
+
+3. **Фоновые задачи** — при `nohup` писать полный путь к python и лог (например под `results/_run_*.log`), чтобы не путать с прогонами без vLLM.
+
+4. Если после смены узла или времени простоя занятость GPU изменилась — **повторить пункт 1** перед новым запуском.
