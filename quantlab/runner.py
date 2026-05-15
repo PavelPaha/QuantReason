@@ -414,6 +414,13 @@ def run_experiment(
                 return stage_idx == 0
             pending = trace_pending_stage_idx(traces[eida])
             if pending is None:
+                # vLLM batch path builds Trace objects before consume; they have no
+                # executor cursor yet but are not finished.
+                tr = traces[eida]
+                if tr.finished_at is None and not tr.segments:
+                    if use_staged_cyclic:
+                        return stage_idx == plan_stage_index
+                    return stage_idx == 0
                 return False
             return pending == stage_idx
 
@@ -545,7 +552,10 @@ def run_experiment(
                         f"[runner] staged wave {w} stage={current_stage}  "
                         f"example {seg_i}/{len(examples)} (batch) ..."
                     )
-                tr = traces[eida]
+                if eida not in traces:
+                    tr = Trace(eida, example.prompt)
+                else:
+                    tr = traces[eida]
                 start_sid = _incoming_wave_stage_idx(tr, current_stage)
                 executor.reset_switch_conditions_from(start_sid)
                 traces[eida] = executor.consume_segment_after_generate(
@@ -580,9 +590,10 @@ def run_experiment(
                         tr_list = []
                         for ex in chunk_ex:
                             ee = ex.example_id
-                            if ee not in traces:
-                                traces[ee] = Trace(ee, ex.prompt)
-                            tr_list.append(traces[ee])
+                            if ee in traces:
+                                tr_list.append(traces[ee])
+                            else:
+                                tr_list.append(Trace(ee, ex.prompt))
                         segments = wave_actor.generate_batch_segments(
                             tr_list,
                             prompt_suffix=stage_row.stage_prompt,

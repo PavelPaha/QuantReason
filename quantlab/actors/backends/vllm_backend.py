@@ -24,6 +24,52 @@ def _prepend_executable_dir_to_path() -> None:
         os.environ["PATH"] = bindir + (sep + current if current else "")
 
 
+def _ensure_flashinfer_cuda_toolchain() -> None:
+    """Pin nvcc/CUDA_HOME for flashinfer JIT (vLLM EngineCore subprocesses).
+
+    flashinfer picks CUDA version from torch (e.g. 12.8) but resolves nvcc from
+    CUDA_HOME / which. A stale system nvcc 12.2 + 12.8 compile flags breaks GDN.
+    Conda cuda-toolkit uses ``lib/`` + ``targets/.../stubs``; flashinfer links with
+    ``-L$CUDA_HOME/lib64/stubs`` — create compatibility symlinks.
+    """
+    prefix = os.environ.get("CONDA_PREFIX", "")
+    if not prefix:
+        return
+    nvcc = os.path.join(prefix, "bin", "nvcc")
+    if not os.path.isfile(nvcc):
+        return
+    os.environ["CUDA_HOME"] = prefix
+    os.environ["FLASHINFER_NVCC"] = nvcc
+    lib64 = os.path.join(prefix, "lib64")
+    stubs_src = os.path.join(prefix, "targets", "x86_64-linux", "lib", "stubs")
+    os.makedirs(lib64, exist_ok=True)
+    stubs_link = os.path.join(lib64, "stubs")
+    if os.path.isdir(stubs_src) and not os.path.exists(stubs_link):
+        os.symlink("../targets/x86_64-linux/lib/stubs", stubs_link)
+    cudart_src = os.path.join(prefix, "lib", "libcudart.so")
+    cudart_link = os.path.join(lib64, "libcudart.so")
+    if os.path.isfile(cudart_src) and not os.path.exists(cudart_link):
+        os.symlink("../lib/libcudart.so", cudart_link)
+    sep = os.pathsep
+    parts = [
+        p
+        for p in os.environ.get("PATH", "").split(sep)
+        if p
+        and not (
+            p == "/usr/local/cuda"
+            or p.startswith("/usr/local/cuda-")
+            or p.startswith("/usr/local/cuda/")
+        )
+    ]
+    os.environ["PATH"] = sep.join([os.path.join(prefix, "bin"), *parts])
+    conda_lib = os.path.join(prefix, "lib")
+    ld = os.environ.get("LD_LIBRARY_PATH", "")
+    if not ld.startswith(conda_lib + os.pathsep) and ld != conda_lib:
+        os.environ["LD_LIBRARY_PATH"] = (
+            conda_lib + (os.pathsep + ld if ld else "")
+        )
+
+
 _QUANT_MAP: dict[QuantizationMethod, str] = {
     QuantizationMethod.GPTQ: "gptq",
     QuantizationMethod.AWQ: "awq",
@@ -101,6 +147,7 @@ class VLLMBackend(BackendBase):
             raise ImportError("vllm is not installed. Run: pip install vllm") from e
 
         _prepend_executable_dir_to_path()
+        _ensure_flashinfer_cuda_toolchain()
 
         quant_arg = self.quantization_override
         if isinstance(quant_arg, str):
