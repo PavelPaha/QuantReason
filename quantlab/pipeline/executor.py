@@ -303,8 +303,10 @@ class PipelineExecutor:
                 else:
                     stage_idx += 1
 
-            if stop_before_stage is not None and stage_idx >= stop_before_stage:
-                partial_stop = True
+            if stop_before_stage is not None:
+                # Staged wave: one external generate. Any in-pipeline cursor (including
+                # cyclic target_stage_index back to an earlier stage) must stay partial.
+                partial_stop = stage_idx < len(self.stages)
 
             break  # один внешний generate на волну staged
 

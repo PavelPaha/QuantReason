@@ -105,6 +105,31 @@ def test_staged_waves_match_nonstaged_for_plan_answer_periodic_loop():
     assert len(full.segments) == len(tr.segments)
 
 
+def test_consume_segment_cyclic_routing_stays_partial():
+    """Batched staged waves use consume_segment; periodic→answer must not set finished_at."""
+    ex = _plan_answer_periodic_executor(max_total_tokens=100)
+    tr = ex.run("e1", "prompt:", stop_before_stage=1)
+    tr = ex.continue_run(tr, stop_before_stage=2)
+    seg = TraceSegment(
+        actor_id="periodic",
+        text="V",
+        token_count=1,
+        start_token_idx=tr.next_token_idx,
+    )
+    ex.reset_switch_conditions_from(2)
+    tr = ex.consume_segment_after_generate(
+        tr, seg, start_stage_idx=2, stop_before_stage=3
+    )
+    assert tr.finished_at is None
+    assert trace_pending_stage_idx(tr) == 1
+    assert trace_in_cyclic_loop(
+        tr,
+        loop_stage_indices=[1, 2],
+        loop_actor_ids={"answer", "periodic"},
+        max_total_tokens=100,
+    )
+
+
 def test_pipeline_max_total_tokens_stops_executor():
     ex = _plan_answer_periodic_executor(max_total_tokens=3)
     tr = ex.run("e1", "prompt:")
