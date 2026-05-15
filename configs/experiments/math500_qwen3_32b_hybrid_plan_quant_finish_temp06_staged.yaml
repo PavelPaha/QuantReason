@@ -1,0 +1,102 @@
+# Как сохранённый прогон math500_qwen3_32b_hybrid_plan_quant_finish (50 задач, seed=42):
+# BF16 план → 2-bit GPTQ ответ, те же стадии и лимиты токенов.
+#
+# Отличия: temperature=0.6 на обоих актёрах; staged_execution + micro-batch vLLM.
+# При OOM или ошибке vLLM «Free memory … less than desired GPU memory utilization»
+# уменьшите gpu_memory_utilization и/или staged_batch_size (--staged-batch-size N).
+#
+# GPU: перед запуском свериться с nvidia-smi; при нехватке свободной VRAM сменить cuda_visible_devices / gpu_memory_utilization.
+
+experiment_name: math500_qwen3_32b_hybrid_plan_quant_finish_temp06_staged
+description: >
+  MATH-500 hybrid FP план → GPTQ 2-bit ответ; T=0.6; staged micro-batch для throughput.
+
+benchmark:
+  name: math500
+  split: test
+  max_examples: 50
+  seed: 42
+
+staged_execution: true
+staged_unload_between_waves: true
+staged_batch_size: 16
+
+actors:
+  - actor_id: qwen3_32b_fp
+    model_id: Qwen/Qwen3-32B
+    backend: vllm
+    precision: bf16
+    quantization: none
+    backend_kwargs:
+      cuda_visible_devices: "3"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.65
+      enable_prefix_caching: true
+    generation_params:
+      max_new_tokens: 512
+      temperature: 0.6
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+  - actor_id: qwen3_32b_gptq2bit
+    model_id: kaitchup/Qwen3-32B-autoround-2bit-gptq
+    backend: vllm
+    precision: fp16
+    quantization: gptq
+    quantization_config:
+      bits: 2
+    backend_kwargs:
+      cuda_visible_devices: "3"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.65
+      enable_prefix_caching: true
+    generation_params:
+      max_new_tokens: 4096
+      temperature: 0.6
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+pipeline:
+  - actor_id: qwen3_32b_fp
+    role: plan
+    handoff_mode: full_prefill
+    max_new_tokens: 600
+    stage_prompt: |
+      Let me make a plan. I will write [PLAN_DONE] when the plan is complete.
+
+      Plan:
+    exit_conditions:
+      - name: after_marker
+        kwargs: {marker: "[PLAN_DONE]", keep_marker: false}
+      - name: after_n_tokens
+        kwargs: {n: 280}
+
+  - actor_id: qwen3_32b_gptq2bit
+    role: answer
+    handoff_mode: full_prefill
+    max_new_tokens: 4096
+    stage_prompt: "Now let me carry out the plan step by step.\n\n"
+    stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+    exit_conditions: []
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+  - name: loop_detected
+  - name: think_closed
+  - name: commit_gap
+  - name: tokens_to_first_correct
+  - name: finish_commit
+  - name: verification_spiral
+  - name: loop_onset_tokens
+  - name: actor_token_split
+  - name: total_generation_ms
+  - name: segment_timing_ms
+  - name: tokens_per_second
+
+output:
+  base_dir: results
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true
