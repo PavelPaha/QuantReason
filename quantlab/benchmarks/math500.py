@@ -5,6 +5,7 @@ from math import isclose
 from typing import Any, Optional
 
 from quantlab.benchmarks.base import BenchmarkAdapter, BenchmarkExample
+from quantlab.benchmarks.boxed import extract_last_boxed
 
 
 def _fix_fracs(string: str) -> str:
@@ -70,31 +71,6 @@ def _strip_string(string: str) -> str:
     string = string.replace(" ", "")
     string = _fix_fracs(string)
     return string
-
-
-def _extract_last_boxed(text: str) -> Optional[str]:
-    parts = text.split("\\boxed")
-    if len(parts) < 2:
-        return None
-    last = parts[-1]
-    if not last:
-        return None
-    if last[0] != "{":
-        return last.split("$")[0].strip() or None
-    depth = 1
-    result = ""
-    for c in last[1:]:
-        if c == "{":
-            depth += 1
-            result += c
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                break
-            result += c
-        else:
-            result += c
-    return result if depth == 0 else None
 
 
 def _last_number(text: str) -> Optional[str]:
@@ -192,7 +168,7 @@ class MATH500Adapter(BenchmarkAdapter):
         )
 
     def extract_answer(self, generated_text: str) -> Optional[str]:
-        pred = _extract_last_boxed(generated_text)
+        pred = extract_last_boxed(generated_text)
         if pred is None:
             pred = _last_number(generated_text)
         if pred is None:
@@ -202,6 +178,6 @@ class MATH500Adapter(BenchmarkAdapter):
     def is_correct(self, predicted: Optional[str], ground_truth: str) -> bool:
         if predicted is None:
             return False
-        gt_boxed = _extract_last_boxed(ground_truth)
+        gt_boxed = extract_last_boxed(ground_truth)
         gt = _strip_string(gt_boxed if gt_boxed is not None else ground_truth)
         return _math_equal(predicted, gt)
