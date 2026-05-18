@@ -28,6 +28,12 @@ python scripts/analysis/plot_budget_curves.py \\
   --run "BF16+GPTQ plan 32k:.../bf16-gptq4-plan-32k" \\
   --metrics accuracy
 
+# Several presets at once:
+python scripts/analysis/plot_budget_curves.py \\
+  --run "BF16 32k:..." ... \\
+  --metric-preset accuracy --metric-preset loop,structure \\
+  --out-dir /path/to/plots
+
 # Replot existing CSVs (no trace recompute):
 python scripts/analysis/plot_budget_curves.py --replot-only --input-dir /path/to/csvs
 """
@@ -250,15 +256,33 @@ def load_traces(run_dir: Path) -> list[Trace]:
         return [Trace.from_dict(json.loads(line)) for line in f]
 
 
-def resolve_metrics(raw: str | None, preset: str | None) -> list[str]:
-    if preset is not None:
-        if preset not in METRIC_PRESETS:
-            raise ValueError(f"unknown preset {preset!r}; choose from {list(METRIC_PRESETS)}")
-        names = list(METRIC_PRESETS[preset])
+def resolve_metrics(raw: str | None, presets: list[str] | None) -> list[str]:
+    names: list[str] = []
+    if presets:
+        expanded: list[str] = []
+        for item in presets:
+            for part in item.replace(" ", ",").split(","):
+                part = part.strip()
+                if part:
+                    expanded.append(part)
+        for preset in expanded:
+            if preset not in METRIC_PRESETS:
+                raise ValueError(
+                    f"unknown preset {preset!r}; choose from {sorted(METRIC_PRESETS)}"
+                )
+            names.extend(METRIC_PRESETS[preset])
     elif raw:
         names = [m.strip() for m in raw.split(",") if m.strip()]
     else:
         raise ValueError("specify --metrics or --metric-preset")
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            unique.append(name)
+    names = unique
 
     for name in names:
         if name == "accuracy":
@@ -753,8 +777,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--metric-preset",
-        choices=sorted(METRIC_PRESETS),
-        help=f"Shortcut for metric sets: {', '.join(METRIC_PRESETS)}",
+        action="append",
+        metavar="PRESET",
+        help=(
+            "Metric preset(s), repeatable and comma-separated. "
+            f"Available: {', '.join(sorted(METRIC_PRESETS))} "
+            "(e.g. --metric-preset loop,structure)"
+        ),
     )
     parser.add_argument("--out-dir", type=Path, default=Path.cwd() / "budget_curves")
     parser.add_argument("--output-stem-prefix", default="")
@@ -764,8 +793,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="_pretty",
         help="Suffix before .png when --pretty (default: _pretty)",
     )
-    parser.add_argument("--dpi", type=int, default=150)
-    parser.add_argument("--pretty", action="store_true", help="Styled plots with markers")
+    parser.add_argument("--dpi", type=int, default=200)
+    parser.add_argument(
+        "--pretty",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Styled plots with markers (default: on; use --no-pretty for plain)",
+    )
     parser.add_argument("--no-plot", action="store_true", help="Write CSV only")
 
     budget_group = parser.add_argument_group("budget thresholds")
@@ -807,8 +841,6 @@ def main() -> None:
         parser.error("use only one of --budgets, --budgets-file, --budgets-csv")
 
     if args.replot_only:
-        if not args.metrics and not args.metric_preset:
-            args.metric_preset = None  # replot all matching CSVs
         run_replot(args)
         return
 
