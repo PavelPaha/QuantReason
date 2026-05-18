@@ -85,50 +85,38 @@ LABEL_ORDER = (
     "GPTQ+GPTQ plan 32k",
 )
 
-METRIC_META: dict[str, dict[str, str | bool]] = {
+METRIC_META: dict[str, dict[str, str]] = {
     "accuracy": {
         "title": "Accuracy vs token budget",
         "ylabel": "Accuracy (MATH-500 judge)",
-        "ymin_at_zero": True,
-        "ylim_0_1": True,
     },
     "loop_detected": {
         "title": "Loop detected vs token budget",
         "ylabel": "Share of examples with loop detected",
-        "ymin_at_zero": True,
-        "ylim_0_1": True,
     },
     "loop_onset_tokens": {
         "title": "Loop onset vs token budget",
         "ylabel": "Mean loop onset (tokens)",
-        "ymin_at_zero": True,
     },
     "verification_spiral": {
         "title": "Verification spiral vs token budget",
         "ylabel": "Mean verification-spiral count",
-        "ymin_at_zero": True,
     },
     "commit_gap": {
         "title": "Commit gap vs token budget",
         "ylabel": "Mean commit gap (tokens after first \\boxed{})",
-        "ymin_at_zero": True,
     },
     "finish_commit": {
         "title": "Finish commit vs token budget",
         "ylabel": "Share with finish-commit pattern",
-        "ymin_at_zero": True,
-        "ylim_0_1": True,
     },
     "tokens_to_first_correct": {
         "title": "Tokens to first correct vs token budget",
         "ylabel": "Mean tokens to first correct answer",
-        "ymin_at_zero": True,
     },
     "think_closed": {
         "title": "Think block closed vs token budget",
         "ylabel": "Share with closed think block",
-        "ymin_at_zero": True,
-        "ylim_0_1": True,
     },
 }
 
@@ -515,41 +503,37 @@ def plot_curves(
     *,
     title: str,
     ylabel: str,
-    ymin_at_zero: bool,
-    ylim_0_1: bool,
     out_png: Path,
     dpi: int,
-    pretty: bool,
 ) -> None:
-    if pretty:
-        apply_plot_style()
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=(10, 5.5))
     series_list = _sort_series(series_list)
 
     for s in series_list:
         c = COLORS.get(s.label)
         if s.std is None:
-            kwargs = dict(
+            ax.plot(
+                budgets,
+                s.mean,
                 label=s.label,
                 color=c,
-                linewidth=2,
                 linestyle="--",
+                marker="o",
+                markersize=5,
+                markerfacecolor="white",
+                markeredgewidth=1.4,
             )
-            if pretty:
-                kwargs.update(
-                    marker="o",
-                    markersize=5,
-                    markerfacecolor="white",
-                    markeredgewidth=1.4,
-                )
-            ax.plot(budgets, s.mean, **kwargs)
         else:
-            kwargs = dict(label=s.label, color=c, linewidth=2)
-            if pretty:
-                kwargs.update(marker="o", markersize=5)
-            ax.plot(budgets, s.mean, **kwargs)
-            lower = np.maximum(s.mean - s.std, 0.0) if ymin_at_zero else s.mean - s.std
-            ax.fill_between(budgets, lower, s.mean + s.std, color=c, alpha=0.22, linewidth=0)
+            ax.plot(budgets, s.mean, label=s.label, color=c, marker="o", markersize=5)
+            ax.fill_between(
+                budgets,
+                s.mean - s.std,
+                s.mean + s.std,
+                color=c,
+                alpha=0.22,
+                linewidth=0,
+            )
 
     ax.set_xlabel("Generation token budget (truncated prefix)")
     ax.set_ylabel(ylabel)
@@ -561,22 +545,11 @@ def plot_curves(
         else budgets[-1] * 0.05
     )
     ax.set_xlim(0, budgets[-1] + x_pad)
+    ax.autoscale(axis="y")
 
-    if ylim_0_1:
-        ax.set_ylim(0, 1.0)
-    elif ymin_at_zero:
-        ax.autoscale(axis="y")
-        _ymin, ymax = ax.get_ylim()
-        ax.set_ylim(0, ymax)
-    else:
-        ax.autoscale(axis="y")
-
-    if not pretty:
-        ax.grid(True, alpha=0.3)
-
-    ax.legend(loc="best", framealpha=0.92 if pretty else None, fontsize=9)
+    ax.legend(loc="best", framealpha=0.92)
     fig.tight_layout()
-    fig.savefig(out_png, dpi=dpi, bbox_inches="tight" if pretty else None)
+    fig.savefig(out_png, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -632,24 +605,18 @@ def run_replot(args: argparse.Namespace) -> None:
             continue
 
         meta = METRIC_META.get(metric_key, {})
-        title = str(meta.get("title", f"{metric_key.replace('_', ' ')} vs token budget"))
-        ylabel = str(meta.get("ylabel", metric_key))
-        ymin_at_zero = bool(meta.get("ymin_at_zero", True))
-        ylim_0_1 = bool(meta.get("ylim_0_1", False))
+        title = meta.get("title", f"{metric_key.replace('_', ' ')} vs token budget")
+        ylabel = meta.get("ylabel", metric_key)
 
         budgets, series_list = load_curve_csv(csv_path)
-        suffix = args.plot_suffix if args.pretty else ""
-        out_png = csv_path.with_name(f"{csv_path.stem}{suffix}.png")
+        out_png = csv_path.with_suffix(".png")
         plot_curves(
             budgets,
             series_list,
             title=title,
             ylabel=ylabel,
-            ymin_at_zero=ymin_at_zero,
-            ylim_0_1=ylim_0_1,
             out_png=out_png,
             dpi=args.dpi,
-            pretty=args.pretty,
         )
         tqdm.write(f"Saved {out_png}")
 
@@ -721,9 +688,7 @@ def run_compute(args: argparse.Namespace) -> None:
     for mi, metric_name in enumerate(metric_names):
         stem = output_stem(metric_name, args.output_stem_prefix, args.output_tag)
         out_csv = args.out_dir / f"{stem}.csv"
-        out_png = args.out_dir / (
-            f"{stem}{args.plot_suffix}.png" if args.pretty else f"{stem}.png"
-        )
+        out_png = args.out_dir / f"{stem}.png"
 
         computed = series_from_raw(raw, mi)
         if base_series is not None and metric_name == "accuracy":
@@ -738,13 +703,10 @@ def run_compute(args: argparse.Namespace) -> None:
             plot_curves(
                 budget_arr,
                 series_list,
-                title=str(meta.get("title", f"{metric_name} vs token budget")),
-                ylabel=str(meta.get("ylabel", metric_name)),
-                ymin_at_zero=bool(meta.get("ymin_at_zero", True)),
-                ylim_0_1=bool(meta.get("ylim_0_1", False)),
+                title=meta.get("title", f"{metric_name} vs token budget"),
+                ylabel=meta.get("ylabel", metric_name),
                 out_png=out_png,
                 dpi=args.dpi,
-                pretty=args.pretty,
             )
             tqdm.write(f"Saved {out_png}")
         tqdm.write(f"Saved {out_csv}")
@@ -788,18 +750,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-dir", type=Path, default=Path.cwd() / "budget_curves")
     parser.add_argument("--output-stem-prefix", default="")
     parser.add_argument("--output-tag", default=DEFAULT_OUTPUT_TAG)
-    parser.add_argument(
-        "--plot-suffix",
-        default="_pretty",
-        help="Suffix before .png when --pretty (default: _pretty)",
-    )
     parser.add_argument("--dpi", type=int, default=200)
-    parser.add_argument(
-        "--pretty",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Styled plots with markers (default: on; use --no-pretty for plain)",
-    )
     parser.add_argument("--no-plot", action="store_true", help="Write CSV only")
 
     budget_group = parser.add_argument_group("budget thresholds")
