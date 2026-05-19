@@ -1,0 +1,113 @@
+# MATH-500: FP16 plan (isolated scaffold) → GPTQ 2-bit reasoning with Plan:\n handoff.
+# Compare with math500_qwen_hybrid.yaml (full_prefill on both stages).
+experiment_name: math500_fp16_plan_scaffold_gptq2bit_brief_baseline
+description: >
+  MATH-500 n=50: FP16 plan_scaffold (1024 tok) → GPTQ 2-bit reasoning (32k).
+  Plan generated in a separate chat scaffold; reasoning gets Plan:\n in assistant prefix.
+
+benchmark:
+  name: math500
+  split: test
+  max_examples: 50
+  seed: 42
+
+staged_execution: true
+staged_unload_between_waves: true
+staged_batch_size: 10
+pipeline_max_total_tokens: 32768
+
+actors:
+  - actor_id: qwen3_32b_fp16
+    model_id: Qwen/Qwen3-32B
+    backend: vllm
+    precision: fp16
+    quantization: none
+    backend_kwargs:
+      cuda_visible_devices: "0"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.90
+      max_model_len: 8192
+      enable_prefix_caching: true
+      enforce_eager: true
+    generation_params:
+      max_new_tokens: 1024
+      temperature: 0.6
+      seed: 42
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+  - actor_id: qwen3_32b_gptq2bit
+    model_id: kaitchup/Qwen3-32B-autoround-2bit-gptq
+    backend: vllm
+    precision: fp16
+    quantization: gptq
+    quantization_config:
+      bits: 2
+    backend_kwargs:
+      cuda_visible_devices: "0"
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.90
+      max_model_len: 32768
+      enable_prefix_caching: true
+      enforce_eager: true
+    generation_params:
+      max_new_tokens: 31744
+      temperature: 0.6
+      seed: 42
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+pipeline:
+  - actor_id: qwen3_32b_fp16
+    role: plan
+    handoff_mode: prompt_without_think
+    stage_prompt_placement: plan_scaffold
+    max_new_tokens: 1024
+    exclude_stage_prompt_from_trace: true
+    stop_sequences:
+      - "[PLAN_FINISH]"
+      - "PLAN_FINISH"
+    stage_system_prompt: |-
+      You are a careful reasoning assistant. Produce only a concise solution plan.
+      Do not solve the problem fully. Write only a concise plan with 3-6 short bullet points or numbered steps.
+      Do not give the final answer, do not use \boxed{}, and stop immediately after the plan.
+    stage_prompt: |-
+      Return only the plan. No final answer.
+    exit_conditions:
+      - name: after_marker
+        kwargs: { marker: "[PLAN_FINISH]", keep_marker: true }
+      - name: after_n_tokens
+        kwargs: { n: 1024 }
+
+  - actor_id: qwen3_32b_gptq2bit
+    role: reasoning
+    handoff_mode: prompt_plan_labeled
+    handoff_plan_label: "Plan:\n"
+    max_new_tokens: 31744
+    stage_prompt: |2
+
+      Solve the problem using the plan above and give the final answer in \boxed{}.
+
+      <think>
+
+    stop_sequences:
+      - "<|im_end|>"
+      - "<|endoftext|>"
+    exit_conditions: []
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+  - name: actor_token_split
+  - name: total_generation_ms
+  - name: segment_timing_ms
+  - name: tokens_per_second
+
+output:
+  base_dir: results
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true
+  trace_include_llm_prompt: true
+  staged_wave_checkpoints: true

@@ -4,7 +4,38 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from quantlab.core.types import SegmentRole, TimingInfo
+from quantlab.core.types import HandoffMode, SegmentRole, StagePromptPlacement, TimingInfo
+
+
+_THINK_OPEN_SUFFIXES = ("<think>\n", "<think>")
+_USER_TURN_END = "<|im_end|>\n<|im_start|>assistant\n"
+_CHAT_USER_START = "<|im_start|>user\n"
+_CHAT_TURN_END = "<|im_end|>"
+_PLAN_ASSISTANT_PREFIX = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
+
+def extract_chat_user_content(prompt: str) -> str:
+    """Problem text from a Qwen-style chat prompt (between user turn markers)."""
+    idx = prompt.find(_CHAT_USER_START)
+    if idx == -1:
+        raise ValueError(
+            f"Cannot extract user content: expected {_CHAT_USER_START!r} in prompt"
+        )
+    start = idx + len(_CHAT_USER_START)
+    end = prompt.find(_CHAT_TURN_END, start)
+    if end == -1:
+        raise ValueError(
+            f"Cannot extract user content: expected {_CHAT_TURN_END!r} after user turn"
+        )
+    return prompt[start:end].rstrip("\n")
+
+
+def _strip_think_tags(text: str) -> str:
+    return (
+        text.replace("</think>", "")
+        .replace("<think>", "")
+        .strip()
+    )
 
 
 @dataclass
@@ -18,6 +49,10 @@ class TraceSegment:
     role: SegmentRole = SegmentRole.UNKNOWN
     timing: Optional[TimingInfo] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: ``stage_prompt`` этого шага (суффикс к ``trace.full_text`` перед генерацией).
+    stage_prompt_sent: str = ""
+    #: Полный промпт одного вызова LLM (= ``full_text_before_segment + stage_prompt_sent``), опционально.
+    llm_prompt_full: Optional[str] = None
 
     @property
     def end_token_idx(self) -> int:
@@ -38,6 +73,8 @@ class TraceSegment:
             role=self.role,
             timing=self.timing,
             metadata=dict(self.metadata),
+            stage_prompt_sent=self.stage_prompt_sent,
+            llm_prompt_full=self.llm_prompt_full,
         )
         right = TraceSegment(
             actor_id=self.actor_id,
@@ -46,11 +83,13 @@ class TraceSegment:
             start_token_idx=self.start_token_idx + left_tokens,
             role=self.role,
             metadata=dict(self.metadata),
+            stage_prompt_sent=self.stage_prompt_sent,
+            llm_prompt_full=self.llm_prompt_full,
         )
         return left, right
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "actor_id": self.actor_id,
             "text": self.text,
             "token_count": self.token_count,
@@ -58,7 +97,11 @@ class TraceSegment:
             "role": self.role.value,
             "timing": self.timing.to_dict() if self.timing else None,
             "metadata": self.metadata,
+            "stage_prompt_sent": self.stage_prompt_sent,
         }
+        if self.llm_prompt_full is not None:
+            out["llm_prompt_full"] = self.llm_prompt_full
+        return out
 
 
 @dataclass
@@ -88,6 +131,99 @@ class Trace:
     def full_text(self) -> str:
         """prompt + generated_text — what the model would see as a complete string."""
         return self.prompt + self.generated_text
+
+    def handoff_prefix(
+        self,
+        mode: HandoffMode = HandoffMode.FULL_PREFILL,
+        *,
+        plan_label: str = "",
+        segments: Optional[list[TraceSegment]] = None,
+    ) -> str:
+        """Context prefix passed to the actor before its ``stage_prompt`` suffix."""
+        segs = self.segments if segments is None else segments
+        generated = "".join(s.text for s in segs)
+        if mode == HandoffMode.SEGMENTS_ONLY:
+            return generated
+        if mode == HandoffMode.PROMPT_WITHOUT_THINK:
+            return self._prompt_without_think_scaffold()
+        if mode == HandoffMode.PROMPT_PLAN_LABELED:
+            return (
+                self._prompt_without_think_scaffold()
+                + plan_label
+                + _strip_think_tags(generated)
+                + "\n"
+            )
+        return self.prompt + generated
+
+    def _prompt_without_think_scaffold(self) -> str:
+        prompt = self.prompt
+        for suffix in _THINK_OPEN_SUFFIXES:
+            if prompt.endswith(suffix):
+                return prompt[: -len(suffix)]
+        return prompt
+
+    def inject_user_stage_prompt(self, prompt: str, user_suffix: str) -> str:
+        """Append ``user_suffix`` to the last user turn, before ``assistant`` opens."""
+        if not user_suffix:
+            return prompt
+        idx = prompt.rfind(_USER_TURN_END)
+        if idx == -1:
+            raise ValueError(
+                "Cannot inject user stage_prompt: expected chat template ending with "
+                f"{_USER_TURN_END!r}"
+            )
+        return prompt[:idx] + "\n\n" + user_suffix + prompt[idx:]
+
+    def build_plan_scaffold_prompt(
+        self,
+        *,
+        stage_system_prompt: str,
+        stage_prompt: str = "",
+        problem: Optional[str] = None,
+    ) -> str:
+        """Plan stage: custom system + ``Problem:\\n…`` user turn + closed empty think block."""
+        prob = extract_chat_user_content(self.prompt) if problem is None else problem
+        user_body = f"Problem:\n{prob}"
+        tail = stage_prompt.strip()
+        if tail:
+            user_body = f"{user_body}\n{tail}"
+        sys_text = stage_system_prompt.strip()
+        return (
+            "<|im_start|>system\n"
+            f"{sys_text}{_CHAT_TURN_END}\n"
+            "<|im_start|>user\n"
+            f"{user_body}{_CHAT_TURN_END}\n"
+            f"{_PLAN_ASSISTANT_PREFIX}"
+        )
+
+    def build_llm_prompt(
+        self,
+        handoff_mode: HandoffMode = HandoffMode.FULL_PREFILL,
+        *,
+        stage_prompt: str = "",
+        stage_prompt_placement: StagePromptPlacement = StagePromptPlacement.ASSISTANT_SUFFIX,
+        stage_system_prompt: str = "",
+        plan_label: str = "",
+        segments: Optional[list[TraceSegment]] = None,
+    ) -> str:
+        """Full string passed to the backend for one generate call."""
+        if stage_prompt_placement == StagePromptPlacement.PLAN_SCAFFOLD:
+            if not stage_system_prompt.strip():
+                raise ValueError(
+                    "stage_system_prompt is required when stage_prompt_placement=plan_scaffold"
+                )
+            return self.build_plan_scaffold_prompt(
+                stage_system_prompt=stage_system_prompt,
+                stage_prompt=stage_prompt,
+            )
+        prefix = self.handoff_prefix(
+            handoff_mode,
+            plan_label=plan_label,
+            segments=segments,
+        )
+        if stage_prompt_placement == StagePromptPlacement.USER_SUFFIX:
+            return self.inject_user_stage_prompt(prefix, stage_prompt)
+        return prefix + stage_prompt
 
     # ── token helpers ─────────────────────────────────────────────────────────
 
@@ -137,6 +273,8 @@ class Trace:
                 role=SegmentRole(s.get("role", "unknown")),
                 timing=TimingInfo(**s["timing"]) if s.get("timing") else None,
                 metadata=s.get("metadata", {}),
+                stage_prompt_sent=s.get("stage_prompt_sent", ""),
+                llm_prompt_full=s.get("llm_prompt_full"),
             )
             for s in d.get("segments", [])
         ]

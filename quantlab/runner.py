@@ -17,6 +17,7 @@ from quantlab.core.types import (
     PrecisionMode,
     QuantizationMethod,
     SegmentRole,
+    StagePromptPlacement,
 )
 from quantlab.evaluation.judge import judge
 from quantlab.metrics.base import MetricBase
@@ -223,6 +224,10 @@ def _build_stage(stage_cfg, condition_registry: type = ConditionRegistry) -> Pip
         loop_back_stage_index=stage_cfg.loop_back_stage_index,
         natural_next_stage_index=stage_cfg.natural_next_stage_index,
         stage_prompt=stage_cfg.stage_prompt,
+        stage_system_prompt=stage_cfg.stage_system_prompt,
+        stage_prompt_placement=StagePromptPlacement(stage_cfg.stage_prompt_placement),
+        exclude_stage_prompt_from_trace=stage_cfg.exclude_stage_prompt_from_trace,
+        handoff_plan_label=stage_cfg.handoff_plan_label,
     )
 
 
@@ -427,6 +432,7 @@ def run_experiment(
         max_loop_tokens=config.pipeline_max_loop_tokens,
         loop_actor_ids=loop_actor_ids,
         verbose=verbose,
+        trace_include_llm_prompt=config.output.trace_include_llm_prompt,
     )
 
     already_judged = (
@@ -717,7 +723,11 @@ def run_experiment(
                                 tr_list.append(Trace(ee, ex.prompt))
                         segments = wave_actor.generate_batch_segments(
                             tr_list,
+                            handoff_mode=stage_row.handoff_mode,
                             prompt_suffix=stage_row.stage_prompt,
+                            handoff_plan_label=stage_row.handoff_plan_label,
+                            stage_prompt_placement=stage_row.stage_prompt_placement,
+                            stage_system_prompt=stage_row.stage_system_prompt,
                             max_new_tokens=stage_row.max_new_tokens,
                             stop_sequences=stage_row.stop_sequences or None,
                             role=stage_row.role,

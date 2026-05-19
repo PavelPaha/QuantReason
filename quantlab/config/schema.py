@@ -60,8 +60,13 @@ class StageConfig(BaseModel):
     # jump to this stage index instead of ``stage_idx + 1``. Use for cyclic pipelines
     # (non-staged, or with ``staged_cyclic_loop_stage_indices`` + staged_execution).
     natural_next_stage_index: Optional[int] = None
-    # Stage-specific instruction injected into the prompt; not stored in the trace.
+    # Stage-specific instruction injected into the prompt; not stored in the trace when
+    # ``exclude_stage_prompt_from_trace: true``.
     stage_prompt: str = ""
+    stage_system_prompt: str = ""
+    stage_prompt_placement: str = "assistant_suffix"
+    exclude_stage_prompt_from_trace: bool = False
+    handoff_plan_label: str = ""
 
 
 # ── benchmark config ──────────────────────────────────────────────────────────
@@ -90,6 +95,7 @@ class OutputConfig(BaseModel):
     save_timing: bool = True
     save_errors: bool = True
     parquet_summary: bool = True
+    trace_include_llm_prompt: bool = False
     # Staged runs: write trace_checkpoints/wave_<n>.jsonl after each example and wave end.
     staged_wave_checkpoints: bool = True
 

@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from quantlab.actors.base import ActorBase
 from quantlab.core.trace import Trace, TraceSegment
-from quantlab.core.types import HandoffMode
+from quantlab.core.types import HandoffMode, StagePromptPlacement
 from quantlab.pipeline.stage import PipelineStage
 from quantlab.switching.base import SwitchDecision
 
@@ -48,6 +48,8 @@ class PipelineExecutor:
         max_loop_tokens: Optional[int] = None,
         loop_actor_ids: Optional[frozenset[str]] = None,
         verbose: bool = False,
+        *,
+        trace_include_llm_prompt: bool = False,
     ) -> None:
         self.stages = stages
         self.actors = actors
@@ -55,6 +57,7 @@ class PipelineExecutor:
         self.max_loop_tokens = max_loop_tokens
         self.loop_actor_ids = loop_actor_ids or frozenset()
         self.verbose = verbose
+        self.trace_include_llm_prompt = trace_include_llm_prompt
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -165,7 +168,11 @@ class PipelineExecutor:
                 stop_sequences=stage.stop_sequences or None,
                 role=stage.role,
                 prompt_suffix=stage.stage_prompt,
+                handoff_plan_label=stage.handoff_plan_label,
+                stage_prompt_placement=stage.stage_prompt_placement,
+                stage_system_prompt=stage.stage_system_prompt,
             )
+            self._annotate_segment_inputs(segment, trace, stage)
 
             # Evaluate exit conditions
             decision = self._evaluate_conditions(stage, trace, segment)
@@ -267,6 +274,8 @@ class PipelineExecutor:
 
             stage = self.stages[stage_idx]
 
+            self._annotate_segment_inputs(segment, trace, stage)
+
             for cond in stage.exit_conditions:
                 cond.reset()
 
@@ -352,6 +361,23 @@ class PipelineExecutor:
         if not actor.is_loaded():
             actor.load()
         return actor
+
+    def _annotate_segment_inputs(
+        self, segment: TraceSegment, trace: Trace, stage: PipelineStage
+    ) -> None:
+        if not stage.exclude_stage_prompt_from_trace:
+            segment.stage_prompt_sent = stage.stage_prompt
+        segment.metadata["handoff_mode"] = stage.handoff_mode.value
+        if stage.handoff_plan_label:
+            segment.metadata["handoff_plan_label"] = stage.handoff_plan_label
+        if self.trace_include_llm_prompt:
+            segment.llm_prompt_full = trace.build_llm_prompt(
+                stage.handoff_mode,
+                stage_prompt=stage.stage_prompt,
+                stage_prompt_placement=stage.stage_prompt_placement,
+                stage_system_prompt=stage.stage_system_prompt,
+                plan_label=stage.handoff_plan_label,
+            )
 
     def _evaluate_conditions(
         self,

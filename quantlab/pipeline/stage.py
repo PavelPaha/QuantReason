@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from quantlab.core.types import HandoffMode, SegmentRole
+from quantlab.core.types import HandoffMode, SegmentRole, StagePromptPlacement
 from quantlab.switching.base import SwitchCondition
 
 
@@ -33,7 +33,6 @@ class PipelineStage:
     exit_conditions: list[SwitchCondition] = field(default_factory=list)
     exit_condition_targets: list[Optional[int]] = field(default_factory=list)
     exit_condition_end_pipeline: list[bool] = field(default_factory=list)
-    exit_condition_end_pipeline: list[bool] = field(default_factory=list)
     handoff_mode: HandoffMode = HandoffMode.FULL_PREFILL
     max_new_tokens: Optional[int] = None
     stop_sequences: list[str] = field(default_factory=list)
@@ -41,6 +40,9 @@ class PipelineStage:
     fallback_stage_index: Optional[int] = None
     loop_back_stage_index: Optional[int] = None
     natural_next_stage_index: Optional[int] = None
-    # Appended to trace.full_text before calling the actor; not stored in trace.
-    # Use to inject stage-specific instructions (e.g., "Create a plan:", "Solve step by step:").
+    # Appended to handoff prefix before generate; see ``exclude_stage_prompt_from_trace``.
     stage_prompt: str = ""
+    stage_system_prompt: str = ""
+    stage_prompt_placement: StagePromptPlacement = StagePromptPlacement.ASSISTANT_SUFFIX
+    exclude_stage_prompt_from_trace: bool = False
+    handoff_plan_label: str = ""
