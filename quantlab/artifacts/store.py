@@ -136,6 +136,19 @@ class ArtifactStore:
             ids.add(str(json.loads(line)["example_id"]))
         return ids
 
+    def list_completed_example_ids(self, run_id: str) -> set[str]:
+        """
+        Example IDs to skip when resuming a non-staged run.
+
+        Uses judgements when present; otherwise a trace with ``finished_at`` set
+        (pipeline finished, even if judgement was not persisted).
+        """
+        completed = self.list_judged_example_ids(run_id)
+        for trace in self.load_traces(run_id):
+            if trace.finished_at is not None:
+                completed.add(trace.example_id)
+        return completed
+
     def load_judgements(self, run_id: str) -> list[dict]:
         path = self.base_dir / run_id / "judgements.jsonl"
         if not path.exists():

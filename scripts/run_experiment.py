@@ -32,7 +32,8 @@ def _stdout_log(message: str) -> None:
     type=int,
     default=None,
     help="With --staged and --resume-run-id: last completed staged wave saved under "
-    "trace_checkpoints/wave_<N>.jsonl; continue from wave N+1 (and optionally finish evaluation).",
+    "trace_checkpoints/wave_<N>.jsonl; continue from wave N+1. "
+    "Omit for non-staged resume (uses traces.jsonl / judgements.jsonl).",
 )
 @click.option(
     "--staged-batch-size",
@@ -66,10 +67,12 @@ def main(
         raw["staged_batch_size"] = staged_batch_size
 
     config = ExperimentConfig.model_validate(raw)
-    if (resume_run_id is None) != (resume_after_wave is None):
+    if resume_after_wave is not None and resume_run_id is None:
+        raise click.UsageError("--resume-after-wave requires --resume-run-id")
+    use_staged = config.staged_execution if staged is None else staged
+    if resume_run_id is not None and use_staged and resume_after_wave is None:
         raise click.UsageError(
-            "--resume-run-id and --resume-after-wave must be passed together "
-            "(or omit both)."
+            "staged resume requires --resume-after-wave (last completed wave index)"
         )
     run_id = run_experiment(
         config,

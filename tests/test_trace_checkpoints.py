@@ -86,3 +86,32 @@ def test_list_judged_and_load_judgements():
         jj = store.load_judgements(run_id)
         assert len(jj) == 2
         assert {j["example_id"] for j in jj} == {"a", "b"}
+
+
+def test_list_completed_example_ids_judged_and_finished_traces():
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("x", {})
+
+        store.save_judgement(
+            run_id,
+            JudgementResult(
+                example_id="judged_only",
+                predicted="1",
+                ground_truth="1",
+                is_correct=True,
+                parse_success=True,
+            ),
+        )
+
+        finished = Trace(example_id="trace_only", prompt="P\n")
+        finished.finished_at = 1.0
+        store.save_trace(run_id, finished)
+
+        unfinished = Trace(example_id="in_progress", prompt="P2\n")
+        store.save_trace(run_id, unfinished)
+
+        assert store.list_completed_example_ids(run_id) == {
+            "judged_only",
+            "trace_only",
+        }

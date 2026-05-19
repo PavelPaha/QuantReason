@@ -250,14 +250,23 @@ def run_experiment(
         across all examples before the next (same semantics as ``full_prefill``).
         Optional unload between waves frees GPU memory for single-model cards.
 
-    resume_run_id / resume_after_wave:
-        Only with staged execution. Loads ``trace_checkpoints/wave_<N>.jsonl`` where
-        N = ``resume_after_wave``, reconnects surviving traces and continues pipelines
-        from wave N+1. Skips ``_record_example`` for examples already present in
-        ``judgements.jsonl``.
-        Completed examples are flushed to ``traces.jsonl`` immediately after their
-        final wave (along with judgement/metrics/timing), rather than waiting until
-        the whole batch completes.
+    resume_run_id:
+        Reuse an existing run directory under ``output.base_dir`` instead of creating
+        a new one.
+
+    resume_after_wave (staged only):
+        Loads ``trace_checkpoints/wave_<N>.jsonl`` where N = ``resume_after_wave``,
+        reconnects surviving traces and continues pipelines from wave N+1.
+        Skips ``_record_example`` for examples already present in ``judgements.jsonl``.
+
+        For **non-staged** runs, pass only ``resume_run_id``: skips examples that
+        already have a judgement or a finished trace in ``traces.jsonl``, and appends
+        new results to the same jsonl files.
+
+        Staged runs require both ``resume_run_id`` and ``resume_after_wave``.
+        Completed staged examples are flushed to ``traces.jsonl`` immediately after
+        their final wave (along with judgement/metrics/timing), rather than waiting
+        until the whole batch completes.
 
         ``staged_batch_size >= 2`` (YAML or CLI): each staged wave invokes vLLM with
         micro-batched prompts; ``traces.jsonl`` stays schema-compatible but per-segment
@@ -266,12 +275,12 @@ def run_experiment(
     use_staged = config.staged_execution if staged_execution is None else staged_execution
     log_verbose = _stdout_log if verbose else None
 
-    if (resume_run_id is None) != (resume_after_wave is None):
+    if resume_after_wave is not None and resume_run_id is None:
+        raise ValueError("resume_after_wave requires resume_run_id")
+    if resume_run_id is not None and use_staged and resume_after_wave is None:
         raise ValueError(
-            "resume_run_id and resume_after_wave must be set together or both omitted"
+            "staged resume requires resume_after_wave (last completed wave index)"
         )
-    if resume_run_id is not None and not use_staged:
-        raise ValueError("resume_* requires staged execution (--staged or YAML staged_execution)")
 
     store = ArtifactStore(base_dir=config.output.base_dir)
     if resume_run_id is not None:
@@ -279,7 +288,16 @@ def run_experiment(
         if not rd.is_dir() or not (rd / "config.json").exists():
             raise FileNotFoundError(f"resume run not found or missing config.json: {rd}")
         run_id = resume_run_id
-        _stdout_log(f"[runner] resuming run_id={run_id} after wave checkpoint {resume_after_wave}")
+        if use_staged:
+            _stdout_log(
+                f"[runner] resuming staged run_id={run_id} after wave checkpoint {resume_after_wave}"
+            )
+        else:
+            n_done = len(store.list_completed_example_ids(run_id))
+            _stdout_log(
+                f"[runner] resuming non-staged run_id={run_id} "
+                f"({n_done} example(s) already completed, will skip)"
+            )
     else:
         run_id = store.new_run(config.experiment_name, config.model_dump())
 
@@ -340,6 +358,9 @@ def run_experiment(
 
     already_judged = (
         store.list_judged_example_ids(run_id) if resume_run_id is not None else set()
+    )
+    completed_examples = (
+        store.list_completed_example_ids(run_id) if resume_run_id is not None else set()
     )
     error_count_so_far = len(store.load_errors(run_id)) if resume_run_id is not None else 0
 
@@ -781,9 +802,22 @@ def run_experiment(
 
     else:
         nonstaged_errors = error_count_so_far
+        nonstaged_done = len(completed_examples)
         for i, example in enumerate(examples):
+            eid = example.example_id
+            if eid in completed_examples:
+                if log_verbose is not None and i % 10 == 0:
+                    log_verbose(
+                        f"[runner] {i}/{len(examples)} skip {eid} (already completed)"
+                    )
+                heartbeat.maybe_log(
+                    completed_examples=nonstaged_done,
+                    error_count=nonstaged_errors,
+                    current_example=i + 1,
+                )
+                continue
             heartbeat.maybe_log(
-                completed_examples=i,
+                completed_examples=nonstaged_done,
                 error_count=nonstaged_errors,
                 current_example=i + 1,
             )
@@ -802,8 +836,10 @@ def run_experiment(
                     verbose=verbose,
                     wandb_logger=wandb_logger,
                 )
+                nonstaged_done += 1
+                completed_examples.add(eid)
                 heartbeat.maybe_log(
-                    completed_examples=i + 1,
+                    completed_examples=nonstaged_done,
                     error_count=nonstaged_errors,
                     current_example=i + 1,
                 )
@@ -811,12 +847,12 @@ def run_experiment(
             except Exception as e:
                 error_msg = traceback.format_exc()
                 if log_verbose is not None:
-                    log_verbose(f"[runner] ERROR on {example.example_id}: {e}")
-                store.save_error(run_id, example.example_id, error_msg)
+                    log_verbose(f"[runner] ERROR on {eid}: {e}")
+                store.save_error(run_id, eid, error_msg)
                 nonstaged_errors += 1
-                wandb_logger.record_error(example_id=example.example_id, error=error_msg)
+                wandb_logger.record_error(example_id=eid, error=error_msg)
                 heartbeat.maybe_log(
-                    completed_examples=i + 1,
+                    completed_examples=nonstaged_done,
                     error_count=nonstaged_errors,
                     current_example=i + 1,
                 )
