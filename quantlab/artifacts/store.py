@@ -1,14 +1,62 @@
 from __future__ import annotations
 
 import json
+import warnings
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from quantlab.core.trace import Trace
 from quantlab.evaluation.judge import JudgementResult
+
+T = TypeVar("T")
+
+
+def _load_jsonl(
+    path: Path,
+    *,
+    label: str,
+    parse: Callable[[dict[str, Any]], T],
+) -> list[T]:
+    """
+    Load JSONL records, skipping blank or corrupt lines.
+
+    Interrupted runs may leave a truncated final line in append-only jsonl files.
+    """
+    if not path.exists():
+        return []
+    out: list[T] = []
+    for line_no, raw in enumerate(path.read_text().splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            warnings.warn(
+                f"Skipping corrupt {label} line {line_no} in {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        if not isinstance(row, dict):
+            warnings.warn(
+                f"Skipping non-object {label} line {line_no} in {path}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        try:
+            out.append(parse(row))
+        except Exception as exc:
+            warnings.warn(
+                f"Skipping invalid {label} line {line_no} in {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    return out
 
 
 def _new_run_id() -> str:
@@ -84,15 +132,11 @@ class ArtifactStore:
 
     def load_staged_wave_checkpoint(self, run_id: str, wave_index: int) -> list[Trace]:
         path = self.base_dir / run_id / "trace_checkpoints" / f"wave_{wave_index}.jsonl"
-        if not path.exists():
-            return []
-        out: list[Trace] = []
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            out.append(Trace.from_dict(json.loads(line)))
-        return out
+        return _load_jsonl(
+            path,
+            label=f"trace checkpoint wave_{wave_index}",
+            parse=Trace.from_dict,
+        )
 
     def list_staged_wave_checkpoint_indices(self, run_id: str) -> list[int]:
         """Sorted wave indices with ``trace_checkpoints/wave_<n>.jsonl`` present."""
@@ -140,15 +184,11 @@ class ArtifactStore:
 
     def list_judged_example_ids(self, run_id: str) -> set[str]:
         path = self.base_dir / run_id / "judgements.jsonl"
-        if not path.exists():
-            return set()
-        ids: set[str] = set()
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            ids.add(str(json.loads(line)["example_id"]))
-        return ids
+        return {
+            str(row["example_id"])
+            for row in _load_jsonl(path, label="judgement", parse=lambda d: d)
+            if row.get("example_id") is not None
+        }
 
     def list_completed_example_ids(self, run_id: str) -> set[str]:
         """
@@ -165,37 +205,21 @@ class ArtifactStore:
 
     def load_judgements(self, run_id: str) -> list[dict]:
         path = self.base_dir / run_id / "judgements.jsonl"
-        if not path.exists():
-            return []
-        return [
-            json.loads(line)
-            for line in path.read_text().splitlines()
-            if line.strip()
-        ]
+        return _load_jsonl(path, label="judgement", parse=lambda d: d)
 
     # ── loading ───────────────────────────────────────────────────────────────
 
     def load_traces(self, run_id: str) -> list[Trace]:
         path = self.base_dir / run_id / "traces.jsonl"
-        if not path.exists():
-            return []
-        return [Trace.from_dict(json.loads(line)) for line in path.read_text().splitlines()]
+        return _load_jsonl(path, label="trace", parse=Trace.from_dict)
 
     def load_metrics(self, run_id: str) -> list[dict]:
         path = self.base_dir / run_id / "metrics.jsonl"
-        if not path.exists():
-            return []
-        return [json.loads(line) for line in path.read_text().splitlines()]
+        return _load_jsonl(path, label="metric", parse=lambda d: d)
 
     def load_errors(self, run_id: str) -> list[dict]:
         path = self.base_dir / run_id / "errors.jsonl"
-        if not path.exists():
-            return []
-        return [
-            json.loads(line)
-            for line in path.read_text().splitlines()
-            if line.strip()
-        ]
+        return _load_jsonl(path, label="error", parse=lambda d: d)
 
     def list_runs(self) -> list[str]:
         if not self.base_dir.exists():

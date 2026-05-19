@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+import warnings
 from pathlib import Path
 
 from quantlab.artifacts.store import ArtifactStore
@@ -115,6 +116,24 @@ def test_list_completed_example_ids_judged_and_finished_traces():
             "judged_only",
             "trace_only",
         }
+
+
+def test_load_traces_skips_truncated_final_line():
+    t = Trace(example_id="ok", prompt="P\n")
+    t.finished_at = 1.0
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("x", {})
+        store.save_trace(run_id, t)
+        path = Path(td) / run_id / "traces.jsonl"
+        path.open("a").write('{"example_id": "bad", "prompt": "incomplete')
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            loaded = store.load_traces(run_id)
+        assert len(loaded) == 1
+        assert loaded[0].example_id == "ok"
+        assert any("corrupt" in str(w.message).lower() for w in caught)
 
 
 def test_list_staged_wave_checkpoint_indices():
