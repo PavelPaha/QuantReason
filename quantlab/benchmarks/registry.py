@@ -29,14 +29,18 @@ class BenchmarkRegistry:
 
 def _register_builtins() -> None:
     from quantlab.benchmarks.math500 import MATH500Adapter
+    from quantlab.benchmarks.aime26 import AIME26Adapter
     from quantlab.benchmarks.gsm8k import GSM8KAdapter
     from quantlab.benchmarks.gpqa import GPQAAdapter
+    from quantlab.benchmarks.gpqa_diamond import GPQADiamondAdapter
     from quantlab.benchmarks.winogrande import WinoGrandeAdapter
 
     mapping = {
         "math500": MATH500Adapter,
+        "aime26": AIME26Adapter,
         "gsm8k": GSM8KAdapter,
         "gpqa": GPQAAdapter,
+        "gpqa_diamond": GPQADiamondAdapter,
         "winogrande": WinoGrandeAdapter,
     }
     for name, cls in mapping.items():

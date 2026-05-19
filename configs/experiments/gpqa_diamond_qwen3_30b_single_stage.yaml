@@ -1,0 +1,58 @@
+# GPQA Diamond (fingertap/GPQA-Diamond): 198 MCQ, split test, ответ A–D.
+experiment_name: gpqa_diamond_qwen3_30b_single_stage
+description: >
+  GPQA Diamond baseline: Qwen3-30B-A3B BF16, парсинг финального ответа A/B/C/D
+  (последняя строка, последняя буква в тексте, или \\boxed{}).
+
+benchmark:
+  name: gpqa_diamond
+  split: test
+  max_examples: 198
+  seed: 42
+
+staged_execution: true
+staged_batch_size: 198
+staged_unload_between_waves: true
+
+pipeline_max_total_tokens: 32768
+
+actors:
+  - actor_id: qwen3_30b_a3b_bf16
+    model_id: Qwen/Qwen3-30B-A3B
+    backend: vllm
+    precision: bf16
+    backend_kwargs:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.6
+      enable_prefix_caching: true
+      max_model_len: 34000
+      enable_chunked_prefill: true
+    generation_params:
+      max_new_tokens: 32768
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+      seed: 0
+
+pipeline:
+  - actor_id: qwen3_30b_a3b_bf16
+    role: reasoning
+    handoff_mode: full_prefill
+    max_new_tokens: 32768
+    stage_prompt: ""
+    exit_conditions:
+      - name: candidate_answer_appeared
+        end_pipeline: true
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+
+output:
+  base_dir: results
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true

@@ -146,6 +146,15 @@ class ExperimentSpec:
     force_single: bool = False
 
 
+@dataclass
+class BenchmarkSpec:
+    name: str = "math500"
+    split: str = "test"
+    subset: str | None = None
+    max_examples: int | None = 500
+    seed: int = 42
+
+
 # ---------------------------------------------------------------------------
 # I/O helpers
 # ---------------------------------------------------------------------------
@@ -230,12 +239,37 @@ def discover_run_dirs(root: Path) -> list[Path]:
     return sorted({p.parent for p in root.rglob("traces.jsonl")}, key=lambda p: str(p))
 
 
-def load_examples(example_ids: set[str], benchmark_seed: int = 42) -> dict:
-    adapter = BenchmarkRegistry.build("math500")
-    examples = adapter.load(split="test", max_examples=500, seed=benchmark_seed)
+def load_benchmark_spec(trace_path: Path) -> BenchmarkSpec:
+    """Read benchmark settings from ``config.json`` next to ``traces.jsonl``."""
+    config_path = trace_path.parent / "config.json"
+    if not config_path.is_file():
+        return BenchmarkSpec()
+    raw = json.loads(config_path.read_text())
+    bench = raw.get("benchmark") or {}
+    return BenchmarkSpec(
+        name=bench.get("name", "math500"),
+        split=bench.get("split", "test"),
+        subset=bench.get("subset"),
+        max_examples=bench.get("max_examples", 500),
+        seed=bench.get("seed", 42),
+    )
+
+
+def load_examples(example_ids: set[str], spec: BenchmarkSpec) -> dict:
+    adapter = BenchmarkRegistry.build(spec.name)
+    examples = adapter.load(
+        split=spec.split,
+        subset=spec.subset,
+        max_examples=spec.max_examples,
+        seed=spec.seed,
+    )
     by_id = {ex.example_id: ex for ex in examples}
-    if example_ids - set(by_id):
-        raise RuntimeError("benchmark example set mismatch")
+    missing = example_ids - set(by_id)
+    if missing:
+        raise RuntimeError(
+            f"benchmark example set mismatch ({spec.name}): "
+            f"{len(missing)} trace id(s) not in loaded examples, e.g. {sorted(missing)[:3]}"
+        )
     return by_id
 
 
@@ -341,9 +375,9 @@ def collect_run_curve(
     metric_names: list[str],
     pbar: tqdm,
     exp_label: str,
+    adapter,
 ) -> np.ndarray:
     traces = load_traces(run_dir)
-    adapter = BenchmarkRegistry.build("math500")
     registry_metrics = {
         n: MetricRegistry.build(n) for n in metric_names if n != "accuracy"
     }
@@ -373,6 +407,7 @@ def collect_experiment(
     budgets: list[int],
     metric_names: list[str],
     pbar: tqdm,
+    adapter,
 ) -> tuple[np.ndarray, np.ndarray | None, bool]:
     run_dirs = discover_run_dirs(spec.root)
     if not run_dirs:
@@ -384,7 +419,9 @@ def collect_experiment(
         run_dirs = run_dirs[:1]
 
     curves = [
-        collect_run_curve(rd, examples, budgets, metric_names, pbar, spec.label)
+        collect_run_curve(
+            rd, examples, budgets, metric_names, pbar, spec.label, adapter
+        )
         for rd in run_dirs
     ]
     stack = np.stack(curves, axis=0)
@@ -639,8 +676,15 @@ def run_compute(args: argparse.Namespace) -> None:
         experiments.append(spec)
 
     sample_trace = next(experiments[0].root.rglob("traces.jsonl"))
+    bench_spec = load_benchmark_spec(sample_trace)
+    adapter = BenchmarkRegistry.build(bench_spec.name)
+    tqdm.write(
+        f"benchmark: {bench_spec.name} split={bench_spec.split} "
+        f"max_examples={bench_spec.max_examples} seed={bench_spec.seed}"
+    )
     examples = load_examples(
-        {json.loads(line)["example_id"] for line in open(sample_trace)}
+        {json.loads(line)["example_id"] for line in open(sample_trace)},
+        bench_spec,
     )
 
     base_series: dict[str, CurveSeries] | None = None
@@ -678,7 +722,7 @@ def run_compute(args: argparse.Namespace) -> None:
         for spec in experiments:
             tqdm.write(f"\n{spec.label} ← {spec.root}")
             mean, std, is_single = collect_experiment(
-                spec, examples, budgets, metric_names, pbar
+                spec, examples, budgets, metric_names, pbar, adapter
             )
             raw[spec.label] = (mean, std, is_single)
 
