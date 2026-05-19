@@ -24,6 +24,8 @@ from quantlab.metrics.registry import MetricRegistry
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
 from quantlab.pipeline.staged_cyclic import (
     cyclic_stage_for_wave,
+    example_runnable_at_stage,
+    staged_wave_has_pending_work,
     trace_pending_stage_idx,
 )
 from quantlab.pipeline.stage import PipelineStage
@@ -224,6 +226,74 @@ def _build_stage(stage_cfg, condition_registry: type = ConditionRegistry) -> Pip
     )
 
 
+def _resolve_staged_resume_wave(
+    *,
+    store: ArtifactStore,
+    run_id: str,
+    examples,
+    already_judged: set[str],
+    failed: set[str],
+    resume_after_wave: Optional[int],
+    n_stages: int,
+    use_staged_cyclic: bool,
+    plan_stage_index: int,
+    loop_stage_indices: Optional[list[int]],
+    preface_stage_indices: list[int],
+) -> tuple[int, dict[str, Trace]]:
+    """
+    Pick wave index to continue from and load partial traces.
+
+    With ``resume_after_wave=W``, assumes wave ``W`` finished for all examples and
+    continues at wave ``W + 1`` using checkpoint ``wave_W``.
+
+    With ``resume_after_wave=None``, uses the latest ``trace_checkpoints/wave_*.jsonl``.
+    If that wave still has examples waiting on its stage, resumes that wave; otherwise
+    continues at the next wave.
+    """
+    if resume_after_wave is not None:
+        ck = store.load_staged_wave_checkpoint(run_id, resume_after_wave)
+        traces = {t.example_id: t for t in ck}
+        if not traces:
+            raise FileNotFoundError(
+                f"empty or missing checkpoint: trace_checkpoints/"
+                f"wave_{resume_after_wave}.jsonl under {run_id}"
+            )
+        return resume_after_wave + 1, traces
+
+    indices = store.list_staged_wave_checkpoint_indices(run_id)
+    if not indices:
+        return 0, {}
+
+    latest = indices[-1]
+    ck = store.load_staged_wave_checkpoint(run_id, latest)
+    traces = {t.example_id: t for t in ck}
+    if not traces:
+        return 0, {}
+
+    if use_staged_cyclic:
+        assert loop_stage_indices is not None
+        current_stage = cyclic_stage_for_wave(
+            latest,
+            plan_stage_index=plan_stage_index,
+            loop_stage_indices=loop_stage_indices,
+            preface_stage_indices=preface_stage_indices,
+        )
+    else:
+        current_stage = min(latest, n_stages - 1)
+
+    if staged_wave_has_pending_work(
+        traces,
+        examples,
+        failed=failed,
+        skip=already_judged,
+        current_stage=current_stage,
+        plan_stage_index=plan_stage_index,
+        use_staged_cyclic=use_staged_cyclic,
+    ):
+        return latest, traces
+    return latest + 1, traces
+
+
 def _incoming_wave_stage_idx(trace: Trace, wave_idx: int) -> int:
     """Interpreter stage cursor from partial staged metadata or ``wave_idx`` for fresh traces."""
     st = trace.metadata.get(EXECUTOR_STATE_KEY)
@@ -254,16 +324,17 @@ def run_experiment(
         Reuse an existing run directory under ``output.base_dir`` instead of creating
         a new one.
 
-    resume_after_wave (staged only):
-        Loads ``trace_checkpoints/wave_<N>.jsonl`` where N = ``resume_after_wave``,
-        reconnects surviving traces and continues pipelines from wave N+1.
-        Skips ``_record_example`` for examples already present in ``judgements.jsonl``.
+    resume_after_wave (staged, optional):
+        Last wave that **fully** completed for every example; resume continues at
+        wave ``resume_after_wave + 1`` from checkpoint ``wave_<N>.jsonl``.
+
+        Omit for staged auto-resume: uses the latest checkpoint and, if that wave was
+        interrupted mid-stage, continues that wave for remaining examples only (requires
+        ``output.staged_wave_checkpoints: true``, which saves after each example).
 
         For **non-staged** runs, pass only ``resume_run_id``: skips examples that
-        already have a judgement or a finished trace in ``traces.jsonl``, and appends
-        new results to the same jsonl files.
+        already have a judgement or a finished trace in ``traces.jsonl``.
 
-        Staged runs require both ``resume_run_id`` and ``resume_after_wave``.
         Completed staged examples are flushed to ``traces.jsonl`` immediately after
         their final wave (along with judgement/metrics/timing), rather than waiting
         until the whole batch completes.
@@ -277,11 +348,6 @@ def run_experiment(
 
     if resume_after_wave is not None and resume_run_id is None:
         raise ValueError("resume_after_wave requires resume_run_id")
-    if resume_run_id is not None and use_staged and resume_after_wave is None:
-        raise ValueError(
-            "staged resume requires resume_after_wave (last completed wave index)"
-        )
-
     store = ArtifactStore(base_dir=config.output.base_dir)
     if resume_run_id is not None:
         rd = store.run_dir(resume_run_id)
@@ -289,9 +355,16 @@ def run_experiment(
             raise FileNotFoundError(f"resume run not found or missing config.json: {rd}")
         run_id = resume_run_id
         if use_staged:
-            _stdout_log(
-                f"[runner] resuming staged run_id={run_id} after wave checkpoint {resume_after_wave}"
-            )
+            if resume_after_wave is not None:
+                _stdout_log(
+                    f"[runner] resuming staged run_id={run_id} "
+                    f"after completed wave {resume_after_wave}"
+                )
+            else:
+                _stdout_log(
+                    f"[runner] resuming staged run_id={run_id} "
+                    f"(auto-detect wave from trace_checkpoints/)"
+                )
         else:
             n_done = len(store.list_completed_example_ids(run_id))
             _stdout_log(
@@ -396,31 +469,42 @@ def run_experiment(
                         "which is also listed in staged_cyclic_loop_stage_indices"
                     )
 
+        failed = (
+            {str(e["example_id"]) for e in store.load_errors(run_id)}
+            if resume_run_id is not None
+            else set()
+        )
         if resume_run_id is not None:
-            assert resume_after_wave is not None
-            ck = store.load_staged_wave_checkpoint(run_id, resume_after_wave)
-            traces = {t.example_id: t for t in ck}
-            if not traces:
-                raise FileNotFoundError(
-                    f"empty or missing checkpoint: trace_checkpoints/"
-                    f"wave_{resume_after_wave}.jsonl under {run_id}"
-                )
-            if not use_staged_cyclic and (
-                resume_after_wave < 0 or resume_after_wave >= n_stages
-            ):
-                raise ValueError(
-                    f"resume_after_wave={resume_after_wave} out of range for "
-                    f"{n_stages} pipeline stage(s)"
-                )
-            if use_staged_cyclic and resume_after_wave < 0:
-                raise ValueError(f"resume_after_wave={resume_after_wave} must be >= 0")
-            wave_start = resume_after_wave + 1
-            failed: set[str] = set()
+            wave_start, traces = _resolve_staged_resume_wave(
+                store=store,
+                run_id=run_id,
+                examples=examples,
+                already_judged=already_judged,
+                failed=failed,
+                resume_after_wave=resume_after_wave,
+                n_stages=n_stages,
+                use_staged_cyclic=use_staged_cyclic,
+                plan_stage_index=plan_stage_index,
+                loop_stage_indices=loop_stage_indices,
+                preface_stage_indices=preface_stage_indices,
+            )
+            if resume_after_wave is not None:
+                if not use_staged_cyclic and (
+                    resume_after_wave < 0 or resume_after_wave >= n_stages
+                ):
+                    raise ValueError(
+                        f"resume_after_wave={resume_after_wave} out of range for "
+                        f"{n_stages} pipeline stage(s)"
+                    )
+                if use_staged_cyclic and resume_after_wave < 0:
+                    raise ValueError(f"resume_after_wave={resume_after_wave} must be >= 0")
             if log_verbose is not None:
-                log_verbose(f"[runner] resume: loaded {len(traces)} traces, waves {wave_start}..")
+                log_verbose(
+                    f"[runner] resume: loaded {len(traces)} trace(s), "
+                    f"starting at wave {wave_start}"
+                )
         else:
             traces = {}
-            failed = set()
             wave_start = 0
 
         # Examples persisted to traces.jsonl / judgements immediately after the final wave
@@ -441,23 +525,22 @@ def run_experiment(
             return False
 
         def _example_runnable_at_stage(eida: str, stage_idx: int) -> bool:
-            if eida in failed:
-                return False
-            if eida not in traces:
-                if use_staged_cyclic:
-                    return stage_idx == plan_stage_index
-                return stage_idx == 0
-            pending = trace_pending_stage_idx(traces[eida])
-            if pending is None:
-                # vLLM batch path builds Trace objects before consume; they have no
-                # executor cursor yet but are not finished.
-                tr = traces[eida]
-                if tr.finished_at is None and not tr.segments:
-                    if use_staged_cyclic:
-                        return stage_idx == plan_stage_index
-                    return stage_idx == 0
-                return False
-            return pending == stage_idx
+            return example_runnable_at_stage(
+                eida,
+                stage_idx,
+                traces,
+                failed,
+                plan_stage_index=plan_stage_index,
+                use_staged_cyclic=use_staged_cyclic,
+            )
+
+        def _checkpoint_staged_wave_if_enabled() -> None:
+            if (
+                config.output.save_traces
+                and config.output.staged_wave_checkpoints
+                and traces
+            ):
+                store.save_staged_wave_checkpoint(run_id, w, traces)
 
         w = wave_start
         while True:
@@ -571,6 +654,7 @@ def run_experiment(
                         traces[eida], stop_before_stage=stop_before
                     )
                 persist_final_wave(example, eida)
+                _checkpoint_staged_wave_if_enabled()
 
             def run_one_wave_batched(seg_i: int, example, segment) -> None:
                 eida = example.example_id
@@ -601,6 +685,7 @@ def run_experiment(
                     stop_before_stage=stop_before,
                 )
                 persist_final_wave(example, eida)
+                _checkpoint_staged_wave_if_enabled()
 
             if staged_use_vllm_batch and log_verbose is not None:
                 log_verbose(
@@ -722,17 +807,14 @@ def run_experiment(
                             total_waves=total_waves,
                         )
 
-            if (
-                config.output.save_traces
-                and config.output.staged_wave_checkpoints
-                and traces
+            _checkpoint_staged_wave_if_enabled()
+            if log_verbose is not None and (
+                config.output.save_traces and config.output.staged_wave_checkpoints and traces
             ):
-                store.save_staged_wave_checkpoint(run_id, w, traces)
-                if log_verbose is not None:
-                    log_verbose(
-                        f"[runner] checkpoint wave {w}: "
-                        f"{len(traces)} traces → trace_checkpoints/wave_{w}.jsonl"
-                    )
+                log_verbose(
+                    f"[runner] checkpoint wave {w}: "
+                    f"{len(traces)} traces → trace_checkpoints/wave_{w}.jsonl"
+                )
             heartbeat.maybe_log(
                 completed_examples=len(persisted_examples) + error_count_so_far,
                 error_count=error_count_so_far,

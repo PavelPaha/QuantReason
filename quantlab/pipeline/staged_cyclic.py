@@ -8,6 +8,60 @@ from quantlab.core.trace import Trace
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY
 
 
+def example_runnable_at_stage(
+    example_id: str,
+    stage_idx: int,
+    traces: dict[str, Trace],
+    failed: set[str],
+    *,
+    plan_stage_index: int,
+    use_staged_cyclic: bool,
+) -> bool:
+    """True if this example still needs pipeline stage ``stage_idx`` on the current wave."""
+    if example_id in failed:
+        return False
+    if example_id not in traces:
+        if use_staged_cyclic:
+            return stage_idx == plan_stage_index
+        return stage_idx == 0
+    pending = trace_pending_stage_idx(traces[example_id])
+    if pending is None:
+        tr = traces[example_id]
+        if tr.finished_at is None and not tr.segments:
+            if use_staged_cyclic:
+                return stage_idx == plan_stage_index
+            return stage_idx == 0
+        return False
+    return pending == stage_idx
+
+
+def staged_wave_has_pending_work(
+    traces: dict[str, Trace],
+    examples,
+    *,
+    failed: set[str],
+    skip: set[str],
+    current_stage: int,
+    plan_stage_index: int,
+    use_staged_cyclic: bool,
+) -> bool:
+    """True if any example still needs work at ``current_stage`` for this wave."""
+    for example in examples:
+        eid = example.example_id
+        if eid in failed or eid in skip:
+            continue
+        if example_runnable_at_stage(
+            eid,
+            current_stage,
+            traces,
+            failed,
+            plan_stage_index=plan_stage_index,
+            use_staged_cyclic=use_staged_cyclic,
+        ):
+            return True
+    return False
+
+
 def trace_pending_stage_idx(trace: Trace) -> Optional[int]:
     """Next pipeline stage index, or ``None`` if this trace has finished."""
     if trace.finished_at is not None:

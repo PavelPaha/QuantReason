@@ -115,3 +115,15 @@ def test_list_completed_example_ids_judged_and_finished_traces():
             "judged_only",
             "trace_only",
         }
+
+
+def test_list_staged_wave_checkpoint_indices():
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("x", {})
+        assert store.list_staged_wave_checkpoint_indices(run_id) == []
+
+        t = Trace(example_id="ex1", prompt="P\n")
+        store.save_staged_wave_checkpoint(run_id, 0, {"ex1": t})
+        store.save_staged_wave_checkpoint(run_id, 2, {"ex1": t})
+        assert store.list_staged_wave_checkpoint_indices(run_id) == [0, 2]

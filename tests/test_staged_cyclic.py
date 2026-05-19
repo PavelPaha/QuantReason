@@ -6,6 +6,8 @@ from quantlab.core.types import HandoffMode, SegmentRole
 from quantlab.pipeline.executor import EXECUTOR_STATE_KEY, PipelineExecutor
 from quantlab.pipeline.staged_cyclic import (
     cyclic_stage_for_wave,
+    example_runnable_at_stage,
+    staged_wave_has_pending_work,
     trace_in_cyclic_loop,
     trace_loop_generated_tokens,
     trace_pending_stage_idx,
@@ -202,6 +204,37 @@ def test_pipeline_max_loop_tokens_excludes_plan():
     tr = ex.run("e1", "prompt:")
     assert trace_loop_generated_tokens(tr, set(loop_actors)) <= 2
     assert tr.total_generated_tokens > 2  # plan segment counts separately
+
+
+def test_staged_wave_pending_work_linear_two_stage():
+    ex = _plan_answer_periodic_executor()
+    done = ex.run("done", "p:", stop_before_stage=1)
+    pending = ex.run("pending", "p:", stop_before_stage=1)
+    traces = {"done": done, "pending": pending}
+    examples = [type("E", (), {"example_id": x})() for x in ("done", "pending")]
+
+    assert trace_pending_stage_idx(done) == 1
+    assert example_runnable_at_stage(
+        "done", 1, traces, set(), plan_stage_index=0, use_staged_cyclic=False
+    )
+    assert example_runnable_at_stage(
+        "pending", 1, traces, set(), plan_stage_index=0, use_staged_cyclic=False
+    )
+
+    finished = ex.continue_run(done, stop_before_stage=None)
+    traces["done"] = finished
+    assert not example_runnable_at_stage(
+        "done", 1, traces, set(), plan_stage_index=0, use_staged_cyclic=False
+    )
+    assert staged_wave_has_pending_work(
+        traces,
+        examples,
+        failed=set(),
+        skip=set(),
+        current_stage=1,
+        plan_stage_index=0,
+        use_staged_cyclic=False,
+    )
 
 
 def test_end_pipeline_on_condition():

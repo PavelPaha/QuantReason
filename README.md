@@ -121,7 +121,7 @@ python scripts/run_experiment.py configs/experiments/math500_qwen_hybrid.yaml -v
 | `--staged` / `--no-staged` | Волновой режим: все примеры проходят стадию 0, затем стадию 1, … Перекрывает `staged_execution` в YAML |
 | `--staged-batch-size K` | vLLM micro-batch по **каждой волне** (K≥2): быстрее throughput, см. ниже про `timing` |
 | `--resume-run-id ID` | Продолжить прогон в той же папке `results/<ID>/` |
-| `--resume-after-wave W` | Только со `--staged`: последняя сохранённая волна `trace_checkpoints/wave_W.jsonl` |
+| `--resume-after-wave W` | Staged: волна W **полностью** завершена для всех примеров (старт с W+1). Без флага — авто по последнему `trace_checkpoints/wave_*.jsonl`, в т.ч. дозапуск прерванной волны |
 
 Пример ограниченного прогона с staged:
 
@@ -140,6 +140,15 @@ python scripts/run_experiment.py path/to/cfg.yaml -v \
 ```
 
 Новые результаты дописываются в те же jsonl; `summary.json` пересчитывается в конце по всем judgements.
+
+**Staged (прервана волна / stage):** при `staged_wave_checkpoints: true` чекпоинт `trace_checkpoints/wave_<n>.jsonl` обновляется после каждого примера. Продолжение:
+
+```bash
+python scripts/run_experiment.py path/to/cfg.yaml --staged -v \
+  --resume-run-id 20260512_012442_a81368
+```
+
+Раннер подхватит последний `wave_*.jsonl`, доделает незавершённые примеры на текущем stage и пойдёт дальше по волнам. Явно указать последнюю **полностью** завершённую волну: `--resume-after-wave W`.
 
 ### Как при этом загружаются модели (по умолчанию)
 

@@ -94,6 +94,20 @@ class ArtifactStore:
             out.append(Trace.from_dict(json.loads(line)))
         return out
 
+    def list_staged_wave_checkpoint_indices(self, run_id: str) -> list[int]:
+        """Sorted wave indices with ``trace_checkpoints/wave_<n>.jsonl`` present."""
+        chk = self.base_dir / run_id / "trace_checkpoints"
+        if not chk.is_dir():
+            return []
+        indices: list[int] = []
+        for path in chk.glob("wave_*.jsonl"):
+            suffix = path.stem.removeprefix("wave_")
+            try:
+                indices.append(int(suffix))
+            except ValueError:
+                continue
+        return sorted(indices)
+
     def save_judgement(self, run_id: str, j: JudgementResult) -> None:
         path = self.base_dir / run_id / "judgements.jsonl"
         with path.open("a") as f:

@@ -90,7 +90,7 @@ class OutputConfig(BaseModel):
     save_timing: bool = True
     save_errors: bool = True
     parquet_summary: bool = True
-    # Staged runs: write trace_checkpoints/wave_<n>.jsonl after each wave.
+    # Staged runs: write trace_checkpoints/wave_<n>.jsonl after each example and wave end.
     staged_wave_checkpoints: bool = True
 
 
