@@ -7,7 +7,7 @@ from quantlab.actors.base import ActorBase, ActorConfig
 from quantlab.actors.backends.transformers_backend import TransformersBackend
 from quantlab.actors.backends.vllm_backend import VLLMBackend
 from quantlab.core.trace import Trace, TraceSegment
-from quantlab.core.types import HandoffMode, SegmentRole, TimingInfo
+from quantlab.core.types import HandoffMode, SegmentRole, StagePromptPlacement, TimingInfo
 
 
 class VLLMActor(ActorBase):
@@ -21,12 +21,16 @@ class VLLMActor(ActorBase):
         if self._backend is None:
             bk = dict(self.config.backend_kwargs)
             cuda_vis = bk.pop("cuda_visible_devices", None)
+            vllm_quantization = bk.pop("quantization", None)
+            vllm_dtype = bk.pop("dtype", None)
             self._backend = VLLMBackend(
                 model_id=self.config.model_id,
                 precision=self.config.precision,
                 quantization=self.config.quantization,
                 quantization_config=self.config.quantization_config,
                 cuda_visible_devices=cuda_vis,
+                dtype_override=vllm_dtype,
+                quantization_override=vllm_quantization,
                 **bk,
             )
         return self._backend
@@ -52,6 +56,9 @@ class VLLMActor(ActorBase):
         stop_sequences: Optional[list[str]] = None,
         role: SegmentRole = SegmentRole.UNKNOWN,
         prompt_suffix: str = "",
+        handoff_plan_label: str = "",
+        stage_prompt_placement: StagePromptPlacement = StagePromptPlacement.ASSISTANT_SUFFIX,
+        stage_system_prompt: str = "",
     ) -> tuple[TraceSegment, Optional[Any]]:
         if handoff_mode == HandoffMode.KV_CACHE:
             raise ValueError("VLLMActor does not support KV_CACHE handoff. Use TransformersActor.")
@@ -62,7 +69,13 @@ class VLLMActor(ActorBase):
             import dataclasses
             params = dataclasses.replace(params, max_new_tokens=max_new_tokens)
 
-        prompt = trace.full_text + prompt_suffix
+        prompt = trace.build_llm_prompt(
+            handoff_mode,
+            stage_prompt=prompt_suffix,
+            stage_prompt_placement=stage_prompt_placement,
+            stage_system_prompt=stage_system_prompt,
+            plan_label=handoff_plan_label,
+        )
         text, token_count, timing = backend.generate(prompt, params, stop_sequences)
 
         segment = TraceSegment(
@@ -79,7 +92,11 @@ class VLLMActor(ActorBase):
         self,
         traces: list[Trace],
         *,
+        handoff_mode: HandoffMode = HandoffMode.FULL_PREFILL,
         prompt_suffix: str,
+        handoff_plan_label: str = "",
+        stage_prompt_placement: StagePromptPlacement = StagePromptPlacement.ASSISTANT_SUFFIX,
+        stage_system_prompt: str = "",
         max_new_tokens: Optional[int] = None,
         stop_sequences: Optional[list[str]] = None,
         role: SegmentRole = SegmentRole.UNKNOWN,
@@ -94,7 +111,16 @@ class VLLMActor(ActorBase):
 
             params = dataclasses.replace(params, max_new_tokens=max_new_tokens)
 
-        prompts = [tr.full_text + prompt_suffix for tr in traces]
+        prompts = [
+            tr.build_llm_prompt(
+                handoff_mode,
+                stage_prompt=prompt_suffix,
+                stage_prompt_placement=stage_prompt_placement,
+                stage_system_prompt=stage_system_prompt,
+                plan_label=handoff_plan_label,
+            )
+            for tr in traces
+        ]
         rows = backend.generate_batch(prompts, params, stop_sequences)
 
         segments: list[TraceSegment] = []
@@ -152,6 +178,9 @@ class TransformersActor(ActorBase):
         stop_sequences: Optional[list[str]] = None,
         role: SegmentRole = SegmentRole.UNKNOWN,
         prompt_suffix: str = "",
+        handoff_plan_label: str = "",
+        stage_prompt_placement: StagePromptPlacement = StagePromptPlacement.ASSISTANT_SUFFIX,
+        stage_system_prompt: str = "",
     ) -> tuple[TraceSegment, Optional[Any]]:
         import dataclasses
 
@@ -169,7 +198,13 @@ class TransformersActor(ActorBase):
                 incremental_text, params, kv_state, stop_sequences
             )
         else:
-            prompt = trace.full_text + prompt_suffix
+            prompt = trace.build_llm_prompt(
+                handoff_mode,
+                stage_prompt=prompt_suffix,
+                stage_prompt_placement=stage_prompt_placement,
+                stage_system_prompt=stage_system_prompt,
+                plan_label=handoff_plan_label,
+            )
             text, token_count, timing = backend.generate(prompt, params, stop_sequences)
 
         segment = TraceSegment(

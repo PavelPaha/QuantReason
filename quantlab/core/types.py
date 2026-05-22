@@ -5,8 +5,23 @@ from enum import Enum
 from typing import Optional
 
 
+class StagePromptPlacement(str, Enum):
+    """Where ``stage_prompt`` is inserted into the assembled LLM string."""
+
+    ASSISTANT_SUFFIX = "assistant_suffix"
+    USER_SUFFIX = "user_suffix"
+    #: Replace chat scaffold: custom system + ``Problem: …`` user turn (plan stage).
+    PLAN_SCAFFOLD = "plan_scaffold"
+
+
 class HandoffMode(str, Enum):
     FULL_PREFILL = "full_prefill"
+    #: Only prior segments (no ``trace.prompt``) — e.g. reasoning from plan text alone.
+    SEGMENTS_ONLY = "segments_only"
+    #: Task prompt without think scaffold + labeled plan segments (no prior think blocks).
+    PROMPT_PLAN_LABELED = "prompt_plan_labeled"
+    #: ``trace.prompt`` with trailing think opener removed (no segments).
+    PROMPT_WITHOUT_THINK = "prompt_without_think"
     KV_CACHE = "kv_cache"
 
 
@@ -22,6 +37,8 @@ class PrecisionMode(str, Enum):
 
 class QuantizationMethod(str, Enum):
     NONE = "none"
+    #: vLLM / HF configs that use Neural Magic compressed-tensors checkpoints (not GPTQ weights format).
+    COMPRESSED_TENSORS = "compressed-tensors"
     GPTQ = "gptq"
     AQLM = "aqlm"
     QUIP_SHARP = "quip_sharp"

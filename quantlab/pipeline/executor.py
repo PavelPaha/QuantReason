@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Optional
 
 from quantlab.actors.base import ActorBase
 from quantlab.core.trace import Trace, TraceSegment
-from quantlab.core.types import HandoffMode
+from quantlab.core.types import HandoffMode, StagePromptPlacement
 from quantlab.pipeline.stage import PipelineStage
 from quantlab.switching.base import SwitchDecision
 
@@ -30,8 +31,13 @@ class PipelineExecutor:
     KV-cache state is threaded through when the handoff mode is KV_CACHE —
     only consecutive stages using the *same* model can do this efficiently.
 
-    Trigger-based fallbacks (loop, format failure) are handled by routing to
-    ``stage.loop_back_stage_index`` or ``stage.fallback_stage_index``.
+    Routing:
+    - Per-condition ``target_stage_index`` (YAML) becomes ``SwitchDecision.routing_stage_index``
+      and is applied before ``loop_back_stage_index`` / ``fallback_stage_index``.
+    - ``natural_next_stage_index`` on a stage is used when the actor stops without any
+      exit condition firing (instead of ``stage_idx + 1``). Use with cyclic pipelines;
+      For cyclic pipelines with staged GPU waves, set ``staged_cyclic_loop_stage_indices``
+      in the experiment config (see runner).
     """
 
     def __init__(
@@ -39,12 +45,19 @@ class PipelineExecutor:
         stages: list[PipelineStage],
         actors: dict[str, ActorBase],
         max_total_tokens: int = 8192,
+        max_loop_tokens: Optional[int] = None,
+        loop_actor_ids: Optional[frozenset[str]] = None,
         verbose: bool = False,
+        *,
+        trace_include_llm_prompt: bool = False,
     ) -> None:
         self.stages = stages
         self.actors = actors
         self.max_total_tokens = max_total_tokens
+        self.max_loop_tokens = max_loop_tokens
+        self.loop_actor_ids = loop_actor_ids or frozenset()
         self.verbose = verbose
+        self.trace_include_llm_prompt = trace_include_llm_prompt
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -137,6 +150,9 @@ class PipelineExecutor:
             stage = self.stages[stage_idx]
             actor = self._get_actor(stage.actor_id)
 
+            for cond in stage.exit_conditions:
+                cond.reset()
+
             if self.verbose:
                 _executor_log(
                     f"[executor] stage={stage_idx} actor={stage.actor_id} "
@@ -152,7 +168,11 @@ class PipelineExecutor:
                 stop_sequences=stage.stop_sequences or None,
                 role=stage.role,
                 prompt_suffix=stage.stage_prompt,
+                handoff_plan_label=stage.handoff_plan_label,
+                stage_prompt_placement=stage.stage_prompt_placement,
+                stage_system_prompt=stage.stage_system_prompt,
             )
+            self._annotate_segment_inputs(segment, trace, stage)
 
             # Evaluate exit conditions
             decision = self._evaluate_conditions(stage, trace, segment)
@@ -166,10 +186,9 @@ class PipelineExecutor:
             else:
                 trace.append_segment(segment)
 
-            # Hard total token limit
-            if trace.total_generated_tokens >= self.max_total_tokens:
+            if self._pipeline_token_limit_reached(trace):
                 if self.verbose:
-                    _executor_log("[executor] max_total_tokens reached, stopping")
+                    _executor_log("[executor] token limit reached, stopping")
                 trace.metadata.pop(EXECUTOR_STATE_KEY, None)
                 trace.finished_at = time.time()
                 return trace
@@ -181,12 +200,24 @@ class PipelineExecutor:
                     stage_idx = len(self.stages)
                     break
                 # If handoff mode changes or actor changes, invalidate KV state
+                if next_idx >= len(self.stages):
+                    stage_idx = next_idx
+                    break
                 if next_idx != stage_idx + 1 or self.stages[next_idx].actor_id != stage.actor_id:
                     kv_state = None
                 stage_idx = next_idx
             else:
                 # Natural stop (model finished), move forward
-                stage_idx += 1
+                if stage.natural_next_stage_index is not None:
+                    ni = stage.natural_next_stage_index
+                    if ni < 0 or ni >= len(self.stages):
+                        raise ValueError(
+                            f"natural_next_stage_index={ni} out of range for "
+                            f"{len(self.stages)} pipeline stage(s)"
+                        )
+                    stage_idx = ni
+                else:
+                    stage_idx += 1
                 kv_state = None
 
             if stop_before_stage is not None and stage_idx >= stop_before_stage:
@@ -243,6 +274,11 @@ class PipelineExecutor:
 
             stage = self.stages[stage_idx]
 
+            self._annotate_segment_inputs(segment, trace, stage)
+
+            for cond in stage.exit_conditions:
+                cond.reset()
+
             decision = self._evaluate_conditions(stage, trace, segment)
 
             if decision.should_switch and decision.split_char_offset is not None:
@@ -251,9 +287,9 @@ class PipelineExecutor:
             else:
                 trace.append_segment(segment)
 
-            if trace.total_generated_tokens >= self.max_total_tokens:
+            if self._pipeline_token_limit_reached(trace):
                 if self.verbose:
-                    _executor_log("[executor] max_total_tokens reached, stopping")
+                    _executor_log("[executor] token limit reached, stopping")
                 trace.metadata.pop(EXECUTOR_STATE_KEY, None)
                 trace.finished_at = time.time()
                 return trace
@@ -265,10 +301,21 @@ class PipelineExecutor:
                     break
                 stage_idx = next_idx
             else:
-                stage_idx += 1
+                if stage.natural_next_stage_index is not None:
+                    ni = stage.natural_next_stage_index
+                    if ni < 0 or ni >= len(self.stages):
+                        raise ValueError(
+                            f"natural_next_stage_index={ni} out of range for "
+                            f"{len(self.stages)} pipeline stage(s)"
+                        )
+                    stage_idx = ni
+                else:
+                    stage_idx += 1
 
-            if stop_before_stage is not None and stage_idx >= stop_before_stage:
-                partial_stop = True
+            if stop_before_stage is not None:
+                # Staged wave: one external generate. Any in-pipeline cursor (including
+                # cyclic target_stage_index back to an earlier stage) must stay partial.
+                partial_stop = stage_idx < len(self.stages)
 
             break  # один внешний generate на волну staged
 
@@ -291,6 +338,15 @@ class PipelineExecutor:
 
         self._reset_conditions(from_stage_idx)
 
+    def _pipeline_token_limit_reached(self, trace: Trace) -> bool:
+        if trace.total_generated_tokens >= self.max_total_tokens:
+            return True
+        if self.max_loop_tokens is None or not self.loop_actor_ids:
+            return False
+        from quantlab.pipeline.staged_cyclic import trace_loop_generated_tokens
+
+        return trace_loop_generated_tokens(trace, set(self.loop_actor_ids)) >= self.max_loop_tokens
+
     def _reset_conditions(self, from_stage_idx: int = 0) -> None:
         for i, stage in enumerate(self.stages):
             if i < from_stage_idx:
@@ -306,6 +362,23 @@ class PipelineExecutor:
             actor.load()
         return actor
 
+    def _annotate_segment_inputs(
+        self, segment: TraceSegment, trace: Trace, stage: PipelineStage
+    ) -> None:
+        if not stage.exclude_stage_prompt_from_trace:
+            segment.stage_prompt_sent = stage.stage_prompt
+        segment.metadata["handoff_mode"] = stage.handoff_mode.value
+        if stage.handoff_plan_label:
+            segment.metadata["handoff_plan_label"] = stage.handoff_plan_label
+        if self.trace_include_llm_prompt:
+            segment.llm_prompt_full = trace.build_llm_prompt(
+                stage.handoff_mode,
+                stage_prompt=stage.stage_prompt,
+                stage_prompt_placement=stage.stage_prompt_placement,
+                stage_system_prompt=stage.stage_system_prompt,
+                plan_label=stage.handoff_plan_label,
+            )
+
     def _evaluate_conditions(
         self,
         stage: PipelineStage,
@@ -315,10 +388,16 @@ class PipelineExecutor:
         # Temporarily append the segment so conditions can read the full trace
         trace.segments.append(segment)
         decision = SwitchDecision(should_switch=False)
-        for cond in stage.exit_conditions:
+        targets = stage.exit_condition_targets or []
+        end_flags = stage.exit_condition_end_pipeline or []
+        for i, cond in enumerate(stage.exit_conditions):
             d = cond.evaluate(trace, segment)
             if d.should_switch:
-                decision = d
+                if i < len(end_flags) and end_flags[i]:
+                    ri = len(self.stages)
+                else:
+                    ri = targets[i] if i < len(targets) else None
+                decision = replace(d, routing_stage_index=ri)
                 break
         trace.segments.pop()
         return decision
@@ -332,6 +411,16 @@ class PipelineExecutor:
         current_idx: int,
         decision: SwitchDecision,
     ) -> Optional[int]:
+        if decision.routing_stage_index is not None:
+            ri = decision.routing_stage_index
+            if ri == len(self.stages):
+                return ri
+            if ri < 0 or ri >= len(self.stages):
+                raise ValueError(
+                    f"target_stage_index / routing_stage_index={ri} out of range for "
+                    f"{len(self.stages)} pipeline stage(s)"
+                )
+            return ri
         if self._is_loop_trigger(stage, decision) and stage.loop_back_stage_index is not None:
             return stage.loop_back_stage_index
         if stage.fallback_stage_index is not None:

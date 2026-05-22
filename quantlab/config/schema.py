@@ -38,6 +38,11 @@ class ConditionConfig(BaseModel):
 
     name: str
     kwargs: dict[str, Any] = Field(default_factory=dict)
+    # When this condition fires, go to this pipeline stage index (0-based).
+    # If unset, routing falls back to ``StageConfig.fallback_stage_index`` or ``stage_idx + 1``.
+    target_stage_index: Optional[int] = None
+    # Stop the pipeline after this condition (no further stages / no finalize actor).
+    end_pipeline: bool = False
 
 
 # ── pipeline stage config ─────────────────────────────────────────────────────
@@ -51,8 +56,17 @@ class StageConfig(BaseModel):
     role: str = "unknown"
     fallback_stage_index: Optional[int] = None
     loop_back_stage_index: Optional[int] = None
-    # Stage-specific instruction injected into the prompt; not stored in the trace.
+    # When the actor stops without any exit_condition firing (natural completion),
+    # jump to this stage index instead of ``stage_idx + 1``. Use for cyclic pipelines
+    # (non-staged, or with ``staged_cyclic_loop_stage_indices`` + staged_execution).
+    natural_next_stage_index: Optional[int] = None
+    # Stage-specific instruction injected into the prompt; not stored in the trace when
+    # ``exclude_stage_prompt_from_trace: true``.
     stage_prompt: str = ""
+    stage_system_prompt: str = ""
+    stage_prompt_placement: str = "assistant_suffix"
+    exclude_stage_prompt_from_trace: bool = False
+    handoff_plan_label: str = ""
 
 
 # ── benchmark config ──────────────────────────────────────────────────────────
@@ -81,7 +95,8 @@ class OutputConfig(BaseModel):
     save_timing: bool = True
     save_errors: bool = True
     parquet_summary: bool = True
-    # Staged runs: write trace_checkpoints/wave_<n>.jsonl after each wave.
+    trace_include_llm_prompt: bool = False
+    # Staged runs: write trace_checkpoints/wave_<n>.jsonl after each example and wave end.
     staged_wave_checkpoints: bool = True
 
 
@@ -137,10 +152,22 @@ class ExperimentConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     wandb: Optional[WandbConfig] = None
 
+    # Hard cap on all generated tokens per example (plan + loop stages), default 8192.
+    pipeline_max_total_tokens: int = 8192
+    # Cap on tokens from cyclic loop stages only (``staged_cyclic_loop_stage_indices`` actors).
+    # Plan / other stages are not counted. If unset, only ``pipeline_max_total_tokens`` applies.
+    pipeline_max_loop_tokens: Optional[int] = None
+
     # One pipeline wave at a time (stage 0 for all examples, then stage 1, …).
     # Uses full_prefill equivalence; see PipelineExecutor.run(stop_before_stage=…).
     staged_execution: bool = False
     staged_unload_between_waves: bool = True
+    # Staged cyclic: wave 0 = plan, optional ``staged_cyclic_preface_stage_indices`` (once each),
+    # then alternate ``staged_cyclic_loop_stage_indices`` until ``pipeline_max_loop_tokens``.
+    # Requires ``staged_execution: true``.
+    staged_cyclic_loop_stage_indices: Optional[list[int]] = None
+    staged_cyclic_preface_stage_indices: Optional[list[int]] = None
+    staged_cyclic_plan_stage_index: int = 0
     # If >= 2 with staged_execution: каждая волна вызывает vLLM.generate на чанках по N промптов
     # (ThroughputMode). Сегменты и traces.jsonl совпадают с одиночным режимом; тайминги в traces
     # отражают batched-сгенерённые оценки (для точных latencies используй replay_timing).

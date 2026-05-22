@@ -1,35 +1,68 @@
 from __future__ import annotations
 
 import json
-import re
+import warnings
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from quantlab.core.trace import Trace
 from quantlab.evaluation.judge import JudgementResult
 
-
-def _slug_experiment_name(name: str, *, max_len: int = 64) -> str:
-    """Filesystem-safe readable prefix from experiment_name."""
-    s = name.strip()
-    if not s:
-        return "experiment"
-    s = re.sub(r"[^\w\-.]+", "_", s, flags=re.UNICODE)
-    s = re.sub(r"_+", "_", s).strip("_")
-    if not s:
-        return "experiment"
-    if len(s) > max_len:
-        s = s[:max_len].rstrip("_")
-    return s or "experiment"
+T = TypeVar("T")
 
 
-def _new_run_id(experiment_name: str) -> str:
-    slug = _slug_experiment_name(experiment_name)
+def _load_jsonl(
+    path: Path,
+    *,
+    label: str,
+    parse: Callable[[dict[str, Any]], T],
+) -> list[T]:
+    """
+    Load JSONL records, skipping blank or corrupt lines.
+
+    Interrupted runs may leave a truncated final line in append-only jsonl files.
+    """
+    if not path.exists():
+        return []
+    out: list[T] = []
+    for line_no, raw in enumerate(path.read_text().splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            warnings.warn(
+                f"Skipping corrupt {label} line {line_no} in {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        if not isinstance(row, dict):
+            warnings.warn(
+                f"Skipping non-object {label} line {line_no} in {path}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        try:
+            out.append(parse(row))
+        except Exception as exc:
+            warnings.warn(
+                f"Skipping invalid {label} line {line_no} in {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    return out
+
+
+def _new_run_id() -> str:
+    """Timestamp-based run folder name under ``output.base_dir`` (no experiment_name prefix)."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{slug}_{ts}_{uuid.uuid4().hex[:6]}"
+    return f"{ts}_{uuid.uuid4().hex[:6]}"
 
 
 @dataclass
@@ -52,7 +85,7 @@ class ArtifactStore:
     Layout::
 
         {base_dir}/
-          {experiment_slug}_{YYYYMMDD}_{HHMMSS}_{uuid6}/
+          {YYYYMMDD}_{HHMMSS}_{uuid6}/
             config.json
             traces.jsonl
             trace_checkpoints/   # staged runs: wave_0.jsonl, wave_1.jsonl, …
@@ -67,7 +100,7 @@ class ArtifactStore:
         self.base_dir = Path(base_dir)
 
     def new_run(self, experiment_name: str, config: dict) -> str:
-        run_id = _new_run_id(experiment_name)
+        run_id = _new_run_id()
         run_dir = self.base_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "config.json").write_text(json.dumps(config, indent=2))
@@ -99,15 +132,25 @@ class ArtifactStore:
 
     def load_staged_wave_checkpoint(self, run_id: str, wave_index: int) -> list[Trace]:
         path = self.base_dir / run_id / "trace_checkpoints" / f"wave_{wave_index}.jsonl"
-        if not path.exists():
+        return _load_jsonl(
+            path,
+            label=f"trace checkpoint wave_{wave_index}",
+            parse=Trace.from_dict,
+        )
+
+    def list_staged_wave_checkpoint_indices(self, run_id: str) -> list[int]:
+        """Sorted wave indices with ``trace_checkpoints/wave_<n>.jsonl`` present."""
+        chk = self.base_dir / run_id / "trace_checkpoints"
+        if not chk.is_dir():
             return []
-        out: list[Trace] = []
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line:
+        indices: list[int] = []
+        for path in chk.glob("wave_*.jsonl"):
+            suffix = path.stem.removeprefix("wave_")
+            try:
+                indices.append(int(suffix))
+            except ValueError:
                 continue
-            out.append(Trace.from_dict(json.loads(line)))
-        return out
+        return sorted(indices)
 
     def save_judgement(self, run_id: str, j: JudgementResult) -> None:
         path = self.base_dir / run_id / "judgements.jsonl"
@@ -141,49 +184,42 @@ class ArtifactStore:
 
     def list_judged_example_ids(self, run_id: str) -> set[str]:
         path = self.base_dir / run_id / "judgements.jsonl"
-        if not path.exists():
-            return set()
-        ids: set[str] = set()
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            ids.add(str(json.loads(line)["example_id"]))
-        return ids
+        return {
+            str(row["example_id"])
+            for row in _load_jsonl(path, label="judgement", parse=lambda d: d)
+            if row.get("example_id") is not None
+        }
+
+    def list_completed_example_ids(self, run_id: str) -> set[str]:
+        """
+        Example IDs to skip when resuming a non-staged run.
+
+        Uses judgements when present; otherwise a trace with ``finished_at`` set
+        (pipeline finished, even if judgement was not persisted).
+        """
+        completed = self.list_judged_example_ids(run_id)
+        for trace in self.load_traces(run_id):
+            if trace.finished_at is not None:
+                completed.add(trace.example_id)
+        return completed
 
     def load_judgements(self, run_id: str) -> list[dict]:
         path = self.base_dir / run_id / "judgements.jsonl"
-        if not path.exists():
-            return []
-        return [
-            json.loads(line)
-            for line in path.read_text().splitlines()
-            if line.strip()
-        ]
+        return _load_jsonl(path, label="judgement", parse=lambda d: d)
 
     # ── loading ───────────────────────────────────────────────────────────────
 
     def load_traces(self, run_id: str) -> list[Trace]:
         path = self.base_dir / run_id / "traces.jsonl"
-        if not path.exists():
-            return []
-        return [Trace.from_dict(json.loads(line)) for line in path.read_text().splitlines()]
+        return _load_jsonl(path, label="trace", parse=Trace.from_dict)
 
     def load_metrics(self, run_id: str) -> list[dict]:
         path = self.base_dir / run_id / "metrics.jsonl"
-        if not path.exists():
-            return []
-        return [json.loads(line) for line in path.read_text().splitlines()]
+        return _load_jsonl(path, label="metric", parse=lambda d: d)
 
     def load_errors(self, run_id: str) -> list[dict]:
         path = self.base_dir / run_id / "errors.jsonl"
-        if not path.exists():
-            return []
-        return [
-            json.loads(line)
-            for line in path.read_text().splitlines()
-            if line.strip()
-        ]
+        return _load_jsonl(path, label="error", parse=lambda d: d)
 
     def list_runs(self) -> list[str]:
         if not self.base_dir.exists():

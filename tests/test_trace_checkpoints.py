@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import re
 import tempfile
+import warnings
 from pathlib import Path
 
 from quantlab.artifacts.store import ArtifactStore
 from quantlab.core.trace import Trace, TraceSegment
 from quantlab.evaluation.judge import JudgementResult
+
+
+def test_new_run_id_is_timestamp_only():
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("my-long-experiment-name", {"experiment_name": "my-long-experiment-name"})
+        assert "my-long-experiment-name" not in run_id
+        assert re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{6}", run_id)
+        assert (Path(td) / run_id / "config.json").exists()
 
 
 def test_staged_wave_checkpoint_roundtrip():
@@ -76,3 +87,62 @@ def test_list_judged_and_load_judgements():
         jj = store.load_judgements(run_id)
         assert len(jj) == 2
         assert {j["example_id"] for j in jj} == {"a", "b"}
+
+
+def test_list_completed_example_ids_judged_and_finished_traces():
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("x", {})
+
+        store.save_judgement(
+            run_id,
+            JudgementResult(
+                example_id="judged_only",
+                predicted="1",
+                ground_truth="1",
+                is_correct=True,
+                parse_success=True,
+            ),
+        )
+
+        finished = Trace(example_id="trace_only", prompt="P\n")
+        finished.finished_at = 1.0
+        store.save_trace(run_id, finished)
+
+        unfinished = Trace(example_id="in_progress", prompt="P2\n")
+        store.save_trace(run_id, unfinished)
+
+        assert store.list_completed_example_ids(run_id) == {
+            "judged_only",
+            "trace_only",
+        }
+
+
+def test_load_traces_skips_truncated_final_line():
+    t = Trace(example_id="ok", prompt="P\n")
+    t.finished_at = 1.0
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("x", {})
+        store.save_trace(run_id, t)
+        path = Path(td) / run_id / "traces.jsonl"
+        path.open("a").write('{"example_id": "bad", "prompt": "incomplete')
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            loaded = store.load_traces(run_id)
+        assert len(loaded) == 1
+        assert loaded[0].example_id == "ok"
+        assert any("corrupt" in str(w.message).lower() for w in caught)
+
+
+def test_list_staged_wave_checkpoint_indices():
+    with tempfile.TemporaryDirectory() as td:
+        store = ArtifactStore(base_dir=str(td))
+        run_id = store.new_run("x", {})
+        assert store.list_staged_wave_checkpoint_indices(run_id) == []
+
+        t = Trace(example_id="ex1", prompt="P\n")
+        store.save_staged_wave_checkpoint(run_id, 0, {"ex1": t})
+        store.save_staged_wave_checkpoint(run_id, 2, {"ex1": t})
+        assert store.list_staged_wave_checkpoint_indices(run_id) == [0, 2]

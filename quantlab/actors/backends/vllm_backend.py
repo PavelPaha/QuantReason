@@ -24,6 +24,52 @@ def _prepend_executable_dir_to_path() -> None:
         os.environ["PATH"] = bindir + (sep + current if current else "")
 
 
+def _ensure_flashinfer_cuda_toolchain() -> None:
+    """Pin nvcc/CUDA_HOME for flashinfer JIT (vLLM EngineCore subprocesses).
+
+    flashinfer picks CUDA version from torch (e.g. 12.8) but resolves nvcc from
+    CUDA_HOME / which. A stale system nvcc 12.2 + 12.8 compile flags breaks GDN.
+    Conda cuda-toolkit uses ``lib/`` + ``targets/.../stubs``; flashinfer links with
+    ``-L$CUDA_HOME/lib64/stubs`` — create compatibility symlinks.
+    """
+    prefix = os.environ.get("CONDA_PREFIX", "")
+    if not prefix:
+        return
+    nvcc = os.path.join(prefix, "bin", "nvcc")
+    if not os.path.isfile(nvcc):
+        return
+    os.environ["CUDA_HOME"] = prefix
+    os.environ["FLASHINFER_NVCC"] = nvcc
+    lib64 = os.path.join(prefix, "lib64")
+    stubs_src = os.path.join(prefix, "targets", "x86_64-linux", "lib", "stubs")
+    os.makedirs(lib64, exist_ok=True)
+    stubs_link = os.path.join(lib64, "stubs")
+    if os.path.isdir(stubs_src) and not os.path.exists(stubs_link):
+        os.symlink("../targets/x86_64-linux/lib/stubs", stubs_link)
+    cudart_src = os.path.join(prefix, "lib", "libcudart.so")
+    cudart_link = os.path.join(lib64, "libcudart.so")
+    if os.path.isfile(cudart_src) and not os.path.exists(cudart_link):
+        os.symlink("../lib/libcudart.so", cudart_link)
+    sep = os.pathsep
+    parts = [
+        p
+        for p in os.environ.get("PATH", "").split(sep)
+        if p
+        and not (
+            p == "/usr/local/cuda"
+            or p.startswith("/usr/local/cuda-")
+            or p.startswith("/usr/local/cuda/")
+        )
+    ]
+    os.environ["PATH"] = sep.join([os.path.join(prefix, "bin"), *parts])
+    conda_lib = os.path.join(prefix, "lib")
+    ld = os.environ.get("LD_LIBRARY_PATH", "")
+    if not ld.startswith(conda_lib + os.pathsep) and ld != conda_lib:
+        os.environ["LD_LIBRARY_PATH"] = (
+            conda_lib + (os.pathsep + ld if ld else "")
+        )
+
+
 _QUANT_MAP: dict[QuantizationMethod, str] = {
     QuantizationMethod.GPTQ: "gptq",
     QuantizationMethod.AWQ: "awq",
@@ -63,6 +109,11 @@ class VLLMBackend(BackendBase):
     last token). Set ``disable_log_stats=True`` in ``backend_kwargs`` to match
     upstream ``LLM`` defaults and avoid extra stat logging (phase fields stay
     ``None``).
+
+    Most ``backend_kwargs`` are forwarded directly to ``vllm.LLM(...)``. For the
+    reserved constructor fields ``dtype`` and ``quantization``, use
+    ``backend_kwargs.dtype`` / ``backend_kwargs.quantization`` in the YAML; they
+    override the enum-derived defaults below.
     """
 
     def __init__(
@@ -72,6 +123,8 @@ class VLLMBackend(BackendBase):
         quantization: QuantizationMethod = QuantizationMethod.NONE,
         quantization_config: Optional[dict] = None,
         cuda_visible_devices: Optional[str] = None,
+        dtype_override: Any | None = None,
+        quantization_override: Any | None = None,
         **llm_kwargs: Any,
     ) -> None:
         self.model_id = model_id
@@ -79,6 +132,8 @@ class VLLMBackend(BackendBase):
         self.quantization = quantization
         self.quantization_config = quantization_config or {}
         self.cuda_visible_devices = cuda_visible_devices
+        self.dtype_override = dtype_override
+        self.quantization_override = quantization_override
         self.llm_kwargs = llm_kwargs
         self._llm = None
         self._vllm_finished_stats: list[Any] = []
@@ -92,9 +147,19 @@ class VLLMBackend(BackendBase):
             raise ImportError("vllm is not installed. Run: pip install vllm") from e
 
         _prepend_executable_dir_to_path()
+        _ensure_flashinfer_cuda_toolchain()
 
-        quant_arg = _QUANT_MAP.get(self.quantization) if self.quantization != QuantizationMethod.NONE else None
-        dtype = _DTYPE_MAP.get(self.precision, "auto")
+        quant_arg = self.quantization_override
+        if isinstance(quant_arg, str):
+            quant_arg = quant_arg.strip() or None
+        if quant_arg is None and self.quantization != QuantizationMethod.NONE:
+            quant_arg = _QUANT_MAP.get(self.quantization)
+
+        dtype = self.dtype_override
+        if isinstance(dtype, str):
+            dtype = dtype.strip() or None
+        if dtype is None:
+            dtype = _DTYPE_MAP.get(self.precision, "auto")
 
         if self.cuda_visible_devices is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(self.cuda_visible_devices).strip()
@@ -138,16 +203,17 @@ class VLLMBackend(BackendBase):
 
         _orig = lm.record
 
-        def _record(
-            scheduler_stats: Any,
-            iteration_stats: Any,
-            engine_idx: Any = None,
-        ) -> None:
+        def _record(*args: Any, **kwargs: Any) -> None:
+            iteration_stats = None
+            if len(args) >= 2:
+                iteration_stats = args[1]
+            elif "iteration_stats" in kwargs:
+                iteration_stats = kwargs["iteration_stats"]
             if iteration_stats is not None:
                 frs = getattr(iteration_stats, "finished_requests", None) or []
                 if frs:
                     self._vllm_finished_stats.extend(frs)
-            return _orig(scheduler_stats, iteration_stats, engine_idx)
+            return _orig(*args, **kwargs)
 
         lm.record = _record  # type: ignore[method-assign]
         lm._quantlab_wrapped_record = True  # type: ignore[attr-defined]

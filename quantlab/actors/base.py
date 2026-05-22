@@ -11,6 +11,7 @@ from quantlab.core.types import (
     PrecisionMode,
     QuantizationMethod,
     SegmentRole,
+    StagePromptPlacement,
 )
 
 
@@ -67,6 +68,9 @@ class ActorBase(ABC):
         stop_sequences: Optional[list[str]] = None,
         role: SegmentRole = SegmentRole.UNKNOWN,
         prompt_suffix: str = "",
+        handoff_plan_label: str = "",
+        stage_prompt_placement: StagePromptPlacement = StagePromptPlacement.ASSISTANT_SUFFIX,
+        stage_system_prompt: str = "",
     ) -> tuple[TraceSegment, Optional[Any]]:
         """
         Continue the trace.
@@ -78,7 +82,7 @@ class ActorBase(ABC):
             max_new_tokens: override for this call
             stop_sequences: additional stop strings for this call
             role: semantic label for the produced segment
-            prompt_suffix: appended to trace.full_text before calling the backend;
+            prompt_suffix: appended to trace handoff prefix before calling the backend;
                            not stored in the trace (stage instruction, e.g. "Plan:")
 
         Returns:

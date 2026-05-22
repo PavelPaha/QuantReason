@@ -1,0 +1,88 @@
+experiment_name: bf16-32k
+description: >
+  MATH-500 consistency: 32768 max_new_tokens. Single Qwen3.5-35B-A3B BF16 actor, no plan stage,
+  no stage prompts. Stops on candidate_answer_appeared (\\boxed{}) or
+  pipeline_max_total_tokens.
+
+benchmark:
+  name: math500
+  split: test
+  max_examples: 500
+  seed: 42
+
+staged_execution: true
+staged_batch_size: 500
+staged_unload_between_waves: true
+
+pipeline_max_total_tokens: 34000
+
+actors:
+  - actor_id: qwen35_35b_a3b_bf16
+    model_id: Qwen/Qwen3.5-35B-A3B
+    backend: vllm
+    precision: bf16
+    backend_kwargs:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.65
+      enable_prefix_caching: true
+      max_model_len: 34000
+      enable_chunked_prefill: true
+    generation_params:
+      max_new_tokens: 32768
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+      seed: 0
+      repetition_penalty: 1.0
+      stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+
+pipeline:
+  - actor_id: qwen35_35b_a3b_bf16
+    role: reasoning
+    handoff_mode: full_prefill
+    max_new_tokens: 32768
+    stage_prompt: ""
+    stop_sequences: ["<|im_end|>", "<|endoftext|>"]
+    exit_conditions:
+      - name: candidate_answer_appeared
+        end_pipeline: true
+
+metrics:
+  - name: accuracy
+  - name: parse_rate
+  - name: reasoning_length
+  - name: loop_detected
+  - name: think_closed
+  - name: commit_gap
+  - name: tokens_to_first_correct
+  - name: finish_commit
+  - name: verification_spiral
+  - name: loop_onset_tokens
+  - name: actor_token_split
+  - name: total_generation_ms
+  - name: segment_timing_ms
+  - name: tokens_per_second
+
+output:
+  base_dir: runs/bf16-32k
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true
+  staged_wave_checkpoints: true
+
+wandb:
+  enabled: true
+  project: fast_reasoning_main
+  entity: shveikin-da
+  group: qwen35-a3b
+  name: bf16-32k
+  tags: ["consistency", "bf16", "32k"]
+  mode: online
+  progress_log_interval: 1
+  log_per_example_table: true
+  per_example_table_key: per_example_metrics
+  upload_run_artifact: false
+
+timing_replay: null

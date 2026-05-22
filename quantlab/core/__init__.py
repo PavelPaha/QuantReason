@@ -6,6 +6,7 @@ from quantlab.core.types import (
     PrecisionMode,
     QuantizationMethod,
     SegmentRole,
+    StagePromptPlacement,
     TimingInfo,
 )
 
@@ -18,5 +19,6 @@ __all__ = [
     "PrecisionMode",
     "QuantizationMethod",
     "SegmentRole",
+    "StagePromptPlacement",
     "TimingInfo",
 ]

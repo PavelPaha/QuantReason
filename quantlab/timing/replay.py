@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 from quantlab.core.trace import Trace, TraceSegment
-from quantlab.core.types import TimingInfo
+from quantlab.core.types import HandoffMode, TimingInfo
 
 
 def _vllm_dtype_arg(precision_mode: str) -> str:
@@ -210,9 +210,14 @@ class VLLMTimingReplay:
                 assert self._fixed_spec is not None
                 self._ensure_loaded(self._fixed_spec)
 
-            prefix = trace.prompt + "".join(
-                s.text for s in trace.segments[:seg_idx]
-            )
+            handoff_raw = seg.metadata.get("handoff_mode", HandoffMode.FULL_PREFILL.value)
+            handoff_mode = HandoffMode(handoff_raw)
+            plan_label = seg.metadata.get("handoff_plan_label", "")
+            prefix = trace.handoff_prefix(
+                handoff_mode,
+                plan_label=plan_label,
+                segments=trace.segments[:seg_idx],
+            ) + seg.stage_prompt_sent
             max_new = replay_generation_token_budget(seg)
             params = SamplingParams(
                 temperature=0.0,
