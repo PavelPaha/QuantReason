@@ -1,10 +1,30 @@
-# Multi-stage reasoning acceleration
+<div align="center">
 
-## Why this project exists
+<h3>Extreme Low-Bit Inference in Reasoning Models:<br/>Failure Modes and Targeted Recovery</h3>
+
+[![EMNLP](https://img.shields.io/badge/EMNLP-2026%20Submission-blue.svg)](https://2026.emnlp.org/) [![Code](https://img.shields.io/badge/Code-QuantReason-green.svg)](https://github.com/PavelPaha/QuantReason)
+
+<br/>
+
+**Official repository for the EMNLP 2026 submission *QuantReason*.**
+
+</div>
+
+<br/>
+
+## Abstract
+
+Large Reasoning Models (LRMs) generate long reasoning traces before producing an answer, making inference expensive. Quantization is a natural way to cut this cost. However, aggressive compression breaks models in qualitatively different ways that require different solutions.
+
+We study full reasoning traces under 2-bit quantization and find two distinct failure modes: **path-finding failure**, where the model loops over unproductive steps without ever reaching a valid answer, and **commitment failure**, where it reaches a correct answer mid-trace but keeps going instead of stopping. We propose one targeted intervention for each -- **FP16 planning**, which provides a high-precision outline that keeps the 2-bit model on track, and **loop rescue**, which detects repetition and either commits to the current answer or reruns the example at full precision.
+
+On Qwen3-8B, **loop rescue** recovers MATH-500 accuracy from **17.2% to 74.2%** and reduces average trace length by **92%**. On Qwen3-32B, combining both interventions closes **22.2 accuracy points** over direct 2-bit execution. These results show that 2-bit reasoning models can serve as reliable inference backends -- not despite their failure modes, but by explicitly accounting for them.
+
+## Overview
 
 Long reasoning tasks — math, hard QA benchmarks, multi-step chains — are costly not only in output tokens but also in generation time. The model does not simply append a short answer: it builds a plan, runs intermediate steps, self-checks, sometimes loops, or takes a long time before producing a final answer in the required format (e.g. `\boxed{...}`).
 
-This repository explores whether that workload can be sped up via **hybrid execution** of the reasoning trace. You do not have to generate the entire chain with one full-precision model. Different parts of the trace may have different sensitivity to precision:
+This repository implements the **selective-precision inference pipeline** from the paper. Different parts of the reasoning trace have different sensitivity to precision:
 
 - **planning** is better left to a full-precision model;
 - the **long main reasoning phase** can be delegated to a quantized / low-bit actor;
@@ -395,3 +415,19 @@ pytest tests/ -q
 | Full reasoning text | `traces.jsonl` → `segments` |
 | Isolated segment timing | `replay_timing.py` |
 | Debug failures | `errors.jsonl`, tail of `nohup` log |
+
+---
+
+## Citation
+
+If you find this work useful, please cite:
+
+```bibtex
+@inproceedings{quantreason2026,
+  title={Extreme Low-Bit Inference in Reasoning Models: Failure Modes and Targeted Recovery},
+  author={Anonymous},
+  booktitle={Proceedings of the Conference on Empirical Methods in Natural Language Processing},
+  year={2026},
+  note={Under review}
+}
+```
