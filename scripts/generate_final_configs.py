@@ -180,6 +180,10 @@ def write(path: Path, content: str) -> None:
     print(f"wrote {path.relative_to(ROOT.parents[1])}")
 
 
+def _variant_subdir(variant: str) -> str:
+    return "qwen32b_gptq2bit" if "gptq2bit" in variant else "qwen32b_fp16"
+
+
 def gsm8k_configs() -> None:
     bench = """benchmark:
   name: gsm8k
@@ -198,7 +202,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "gsm8k/single_fp16.yaml",
+        ROOT / "gsm8k/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_gsm8k_single_fp16
 description: >
   GSM8K test (1319): FP16 single-stage. Problem + solve/\\\\boxed in user; assistant opens <|redacted_thinking>.
@@ -226,7 +230,7 @@ metrics:
     )
 
     write(
-        ROOT / "gsm8k/single_gptq2bit.yaml",
+        ROOT / "gsm8k/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_gsm8k_single_gptq2bit
 description: >
   GSM8K test (1319): GPTQ 2-bit single-stage. Same layout as FP16 single (open <|redacted_thinking>).
@@ -280,7 +284,7 @@ metrics:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"gsm8k/{name}.yaml", body)
+        write(ROOT / f"gsm8k/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def math500_configs() -> None:
@@ -301,7 +305,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "math500/single_fp16.yaml",
+        ROOT / "math500/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_math500_single_fp16
 description: >
   MATH-500 (500): FP16 single-stage. Problem + solve/\\\\boxed in user; assistant opens <|redacted_thinking>.
@@ -329,7 +333,7 @@ metrics:
     )
 
     write(
-        ROOT / "math500/single_gptq2bit.yaml",
+        ROOT / "math500/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_math500_single_gptq2bit
 description: >
   MATH-500 (500): GPTQ 2-bit single-stage. Same layout as FP16 single (open <|redacted_thinking>).
@@ -383,7 +387,7 @@ metrics:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"math500/{name}.yaml", body)
+        write(ROOT / f"math500/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def aime2026_configs() -> None:
@@ -405,7 +409,7 @@ staged_batch_size: {batch}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "aime2026/single_fp16.yaml",
+        ROOT / "aime2026/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_aime2026_single_fp16
 description: >
   AIME 2026 (30): FP16 single-stage. Integer 0-999 + \\\\boxed in user; assistant opens <|redacted_thinking>.
@@ -433,7 +437,7 @@ metrics:
     )
 
     write(
-        ROOT / "aime2026/single_gptq2bit.yaml",
+        ROOT / "aime2026/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_aime2026_single_gptq2bit
 description: >
   AIME 2026 (30): GPTQ 2-bit single-stage. Same layout as FP16 single.
@@ -487,7 +491,7 @@ metrics:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"aime2026/{name}.yaml", body)
+        write(ROOT / f"aime2026/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def arc_easy_configs() -> None:
@@ -508,7 +512,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "arc_easy/single_fp16.yaml",
+        ROOT / "arc_easy/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_arc_easy_single_fp16
 description: >
   ARC-Easy test (2376): FP16 single-stage MCQ. Question + choices in user; assistant opens <|redacted_thinking>.
@@ -529,7 +533,7 @@ pipeline:
     )
 
     write(
-        ROOT / "arc_easy/single_gptq2bit.yaml",
+        ROOT / "arc_easy/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_arc_easy_single_gptq2bit
 description: >
   ARC-Easy test (2376): GPTQ 2-bit single-stage MCQ. Same layout as FP16 single (open <|redacted_thinking>).
@@ -576,7 +580,7 @@ pipeline:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"arc_easy/{name}.yaml", body)
+        write(ROOT / f"arc_easy/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def arc_challenge_configs() -> None:
@@ -597,7 +601,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "arc_challenge/single_fp16.yaml",
+        ROOT / "arc_challenge/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_arc_challenge_single_fp16
 description: >
   ARC-Challenge test (1172): FP16 single-stage MCQ. Question + choices in user; assistant opens <|redacted_thinking>.
@@ -618,7 +622,7 @@ pipeline:
     )
 
     write(
-        ROOT / "arc_challenge/single_gptq2bit.yaml",
+        ROOT / "arc_challenge/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_arc_challenge_single_gptq2bit
 description: >
   ARC-Challenge test (1172): GPTQ 2-bit single-stage MCQ. Same layout as FP16 single (open <|redacted_thinking>).
@@ -665,7 +669,7 @@ pipeline:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"arc_challenge/{name}.yaml", body)
+        write(ROOT / f"arc_challenge/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def gpqa_configs() -> None:
@@ -687,7 +691,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "gpqa_diamond/single_fp16.yaml",
+        ROOT / "gpqa_diamond/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_gpqa_diamond_single_fp16
 description: >
   GPQA Diamond (198): FP16 single-stage MCQ. Default TP=1 on GPU {GPU};
@@ -709,7 +713,7 @@ pipeline:
     )
 
     write(
-        ROOT / "gpqa_diamond/single_gptq2bit.yaml",
+        ROOT / "gpqa_diamond/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_gpqa_diamond_single_gptq2bit
 description: >
   GPQA Diamond (198): GPTQ 2-bit single-stage MCQ.
@@ -756,7 +760,7 @@ pipeline:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"gpqa_diamond/{name}.yaml", body)
+        write(ROOT / f"gpqa_diamond/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def winogrande_configs() -> None:
@@ -778,7 +782,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "winogrande/single_fp16.yaml",
+        ROOT / "winogrande/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_winogrande_single_fp16
 description: >
   WinoGrande XL validation (1267): FP16 single-stage. lm-eval choice prompt in user; assistant opens <|redacted_thinking>.
@@ -806,7 +810,7 @@ metrics:
     )
 
     write(
-        ROOT / "winogrande/single_gptq2bit.yaml",
+        ROOT / "winogrande/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_winogrande_single_gptq2bit
 description: >
   WinoGrande XL validation (1267): GPTQ 2-bit single-stage. Same prompt layout as FP16 single.
@@ -860,7 +864,7 @@ metrics:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"winogrande/{name}.yaml", body)
+        write(ROOT / f"winogrande/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def strategyqa_configs() -> None:
@@ -881,7 +885,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "strategyqa/single_fp16.yaml",
+        ROOT / "strategyqa/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_strategyqa_single_fp16
 description: >
   StrategyQA test (687): FP16 single-stage yes/no. Question in user; assistant opens <|redacted_thinking>.
@@ -909,7 +913,7 @@ metrics:
     )
 
     write(
-        ROOT / "strategyqa/single_gptq2bit.yaml",
+        ROOT / "strategyqa/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_strategyqa_single_gptq2bit
 description: >
   StrategyQA test (687): GPTQ 2-bit single-stage yes/no. Same prompt layout as FP16 single.
@@ -963,7 +967,7 @@ metrics:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"strategyqa/{name}.yaml", body)
+        write(ROOT / f"strategyqa/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def piqa_configs() -> None:
@@ -984,7 +988,7 @@ staged_batch_size: {BATCH_SIZE}
 max_total_tokens: {CTX_LEN}"""
 
     write(
-        ROOT / "piqa/single_fp16.yaml",
+        ROOT / "piqa/qwen32b_fp16/single_fp16.yaml",
         f"""experiment_name: final_piqa_single_fp16
 description: >
   PIQA validation (1838): FP16 single-stage. lm-eval Question + two solutions in user; assistant opens <|redacted_thinking>.
@@ -1012,7 +1016,7 @@ metrics:
     )
 
     write(
-        ROOT / "piqa/single_gptq2bit.yaml",
+        ROOT / "piqa/qwen32b_gptq2bit/single_gptq2bit.yaml",
         f"""experiment_name: final_piqa_single_gptq2bit
 description: >
   PIQA validation (1838): GPTQ 2-bit single-stage. Same layout as FP16 single (open <|redacted_thinking>).
@@ -1066,7 +1070,7 @@ metrics:
                 OUTPUT,
             ]
         )
-        write(ROOT / f"piqa/{name}.yaml", body)
+        write(ROOT / f"piqa/{_variant_subdir(name)}/{name}.yaml", body)
 
 
 def main() -> None:

@@ -1,175 +1,263 @@
 # Final experiment configs
 
-Канонические конфиги для сравнения **Qwen3-32B FP16** vs **GPTQ 2-bit** на семи бенчмарках.
+All reproduction YAMLs live under `configs/final/<dataset>/`:
 
-## Матрица (28 конфигов)
+```
+configs/final/math500/
+├── qwen32b_fp16/                 # Qwen3-32B FP16 (single + hybrid FP16→FP16)
+│   ├── single_fp16.yaml
+│   └── hybrid_fp16_fp16.yaml
+├── qwen32b_gptq2bit/             # GPTQ 2-bit (single + hybrid FP16 plan → GPTQ)
+│   ├── single_gptq2bit.yaml
+│   └── hybrid_fp16_gptq2bit.yaml
+├── qwen32b_nvfp4/                # Qwen3-32B NVFP4 weights, default KV cache
+│   └── single_nvfp4.yaml
+├── qwen32b_nvfp4_kv4/            # Qwen3-32B NVFP4 + NVFP4 KV cache
+│   └── single_nvfp4_kv4.yaml
+├── qwen8b_fp16/                  # Qwen3-8B FP16 baselines (paper comparison)
+│   ├── single_fp16.yaml
+│   └── hybrid_fp16_fp16.yaml
+├── qwen8b_nvfp4/                 # Qwen3-8B NVFP4 single + FP16→32B-NVFP4 hybrid
+│   ├── single_8b_nvfp4.yaml
+│   └── hybrid_fp16_nvfp4.yaml
+└── qwen8b_moe35b_nvfp4/          # MoE 35B NVFP4 single + hybrid
+    ├── single_moe35b_nvfp4.yaml
+    └── hybrid_fp16_moe35b_nvfp4.yaml
+```
 
-| Dataset | `single_fp16` | `single_gptq2bit` | `hybrid_fp16_fp16` | `hybrid_fp16_gptq2bit` |
-|---------|---------------|---------------------|--------------------|-------------------------|
-| `gsm8k/` | single answer | single answer | plan FP16 → reason FP16 | plan FP16 → reason GPTQ |
-| `math500/` | single answer | single answer | plan FP16 → reason FP16 | plan FP16 → reason GPTQ |
-| `aime2026/` | single answer (integer 0–999) | single answer | plan FP16 → reason FP16 | plan FP16 → reason GPTQ |
-| `arc_easy/` | MCQ | MCQ | plan FP16 → reason FP16 | plan FP16 → reason GPTQ |
-| `gpqa_diamond/` | MCQ | MCQ | plan FP16 → reason FP16 | plan FP16 → reason GPTQ |
-| `winogrande/` | MCQ (1/2) | MCQ | plan FP16 → reason FP16 | plan FP16 → reason GPTQ |
-| `piqa/` | MCQ (1/2) | MCQ | plan FP16 → reason FP16 | plan FP16 → reason GPTQ |
+| Path pattern | Description |
+|--------------|-------------|
+| `configs/final/<dataset>/qwen32b_fp16/` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
+| `configs/final/<dataset>/qwen32b_gptq2bit/` | GPTQ 2-bit single- and hybrid variants |
+| `configs/final/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4 weights, default KV (`results/final_qwen8b_nvfp4`) |
+| `configs/final/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 weights + NVFP4 KV cache |
+| `configs/final/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 single/hybrid baselines for NVFP4 paper sweeps |
+| `configs/final/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16 planner → 32B NVFP4 hybrid |
+| `configs/final/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + FP16 planner hybrid |
 
-- **single** — одна стадия `answer`.
-- **hybrid** — plan (FP16, до 1024 tok, `plan_scaffold`) → reasoning; план в **user** (`prompt_plan_in_user`).
+Nine datasets: `aime2026`, `arc_challenge`, `arc_easy`, `gpqa_diamond`, `gsm8k`, `math500`, `piqa`, `strategyqa`, `winogrande`.
 
-Перегенерация всех yaml из шаблона (GPU по умолчанию `"0"`):
+The sections below document the **hybrid baseline** matrix. NVFP4 families use the same variant names inside their subfolder.
+
+## Hybrid baseline — variant matrix (36 configs)
+
+Four variants per dataset under `qwen32b_fp16/` or `qwen32b_gptq2bit/`:
+
+| Variant | Pipeline |
+|---------|----------|
+| `single_fp16` | One stage, full FP16 answer |
+| `single_gptq2bit` | One stage, GPTQ 2-bit answer |
+| `hybrid_fp16_fp16` | FP16 plan → FP16 reasoning |
+| `hybrid_fp16_gptq2bit` | FP16 plan → GPTQ 2-bit reasoning |
+
+| Dataset | Task type | Notes |
+|---------|-----------|--------|
+| `gsm8k/` | numeric, `\boxed{}` | 500 examples |
+| `math500/` | math, `\boxed{}` | 500 examples |
+| `aime2026/` | integer 0–999 | 30 examples |
+| `arc_easy/` | MCQ (A–D) | full test split (`max_examples: null`) |
+| `arc_challenge/` | MCQ (A–D) | full test split |
+| `gpqa_diamond/` | MCQ | ~198 examples |
+| `strategyqa/` | yes/no | full test split |
+| `winogrande/` | MCQ (1 / 2) | winogrande_xl validation |
+| `piqa/` | MCQ (1 / 2) | validation split |
+
+- **single** — one `answer` stage.
+- **hybrid** — plan (FP16, up to 1024 tokens, `plan_scaffold` handoff) → reasoning; plan text is injected into **user** (`prompt_plan_in_user`).
+
+Regenerate all YAMLs from the template (default GPU `"0"`):
 
 ```bash
 python scripts/generate_final_configs.py
-# затем вручную подставьте cuda_visible_devices в нужные yaml
+# then set cuda_visible_devices in the YAMLs you will run
 ```
 
-## Подготовка данных (один раз)
+## Data prep (one time)
+
+Vendored files live under `data/`. Refresh if needed:
 
 ```bash
-# AIME-2026 (30 задач в train.json)
 python scripts/sync_aime2026_data.py
-
-# ARC-Easy, WinoGrande, PIQA
 python scripts/prepare_arc_easy_data.py
-python scripts/prepare_winogrande_data.py
 python scripts/prepare_piqa_data.py
+python scripts/prepare_winogrande_data.py
+python scripts/prepare_strategyqa_data.py
 ```
 
-GSM8K и MATH-500 подгружаются через HuggingFace `datasets` при запуске.
+GSM8K and MATH-500 are fetched from HuggingFace `datasets` at run time.
 
-## Перед запуском
+## Before you run
 
-1. Укажите GPU в yaml: `actors[].backend_kwargs.cuda_visible_devices` (строка `"5"` или `"4,5"` для TP=2).
-2. Для **GPQA FP16 single** на 32k при OOM увеличьте `tensor_parallel_size: 2` и две карты (см. комментарий в `gpqa_diamond/single_fp16.yaml`).
-3. Рекомендуется `export VLLM_USE_V1=0` (уже выставляется в `scripts/run_experiment.py`).
+1. Set GPU ids in each YAML: `actors[].backend_kwargs.cuda_visible_devices` (e.g. `"5"` or `"4,5"` for TP=2).
+2. For **GPQA FP16 single** at 32k context, if you hit OOM use `tensor_parallel_size: 2` on two cards (see comment in `gpqa_diamond/single_fp16.yaml`).
+3. Staged hybrid runs unload models between waves; vLLM EngineCore children are reaped automatically.
 
-## Запуск одного конфига
+## KV cache dtype
 
-Из корня репозитория:
+vLLM reads `kv_cache_dtype` from `actors[].backend_kwargs` (forwarded to `vllm.LLM(...)`). If the field is **omitted**, vLLM uses **`auto`** (KV dtype follows model precision — typically bf16/fp16).
+
+Supported values (vLLM 0.21+): `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`, `nvfp4`.
+
+```yaml
+actors:
+- actor_id: qwen3_32b_nvfp4
+  model_id: RedHatAI/Qwen3-32B-NVFP4
+  backend: vllm
+  backend_kwargs:
+    cuda_visible_devices: '5'
+    max_model_len: 32768
+    kv_cache_dtype: nvfp4   # fp8 | nvfp4 | auto (omit = auto)
+```
+
+In **hybrid** configs set `kv_cache_dtype` on each actor separately if plan and reason stages need different KV settings.
+
+Built-in comparison pair (32B NVFP4, same model, different KV):
+
+| Config | KV cache |
+|--------|----------|
+| `qwen32b_nvfp4/single_nvfp4.yaml` | default (`auto`) |
+| `qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml` | `nvfp4` |
+
+To try another dtype on an existing config, add or change `kv_cache_dtype` under the relevant actor's `backend_kwargs` (or copy the YAML to a new variant name).
+
+For **throughput** sweeps across KV dtypes, use `scripts/bench_qwen_throughput.py --kv-cache-dtype …` — see the root [README](../../README.md#throughput--kv-cache-benchmarks).
+
+## Running one config
+
+From the repo root:
 
 ```bash
-python scripts/run_experiment.py configs/final/<dataset>/<variant>.yaml -v
+python scripts/run_experiment.py configs/final/<dataset>/qwen32b_fp16/<variant>.yaml -v
+python scripts/run_experiment.py configs/final/<dataset>/qwen32b_gptq2bit/<variant>.yaml -v
 ```
 
-Опции:
+Useful flags:
 
-| Флаг | Назначение |
-|------|------------|
-| `-v` | Подробный лог в `results/.../run.log` |
-| `--max-examples N` | Переопределить число примеров (smoke) |
-| `--output-dir PATH` | Другая база для артефактов |
-| `--staged-batch-size N` | Micro-batch в staged-режиме |
+| Flag | Meaning |
+|------|---------|
+| `-v` | Verbose log |
+| `--max-examples N` | Override example count (quick smoke) |
+| `--output-dir PATH` | Change results base directory |
+| `--staged-batch-size N` | vLLM micro-batch per staged wave |
 
-Артефакты: `results/<category>/<run_id>/` — `config.json`, `traces.jsonl` (промпт + `llm_prompt_full` + ответы), `judgements.jsonl`, `summary.json`.
+Artifacts: `results/<category>/<run_id>/` — `config.json`, `traces.jsonl`, `judgements.jsonl`, `summary.json`.
 
 ---
 
-## Все 28 конфигов — команды запуска
+## Launch commands (all 36 configs)
 
-Подставьте свои GPU в yaml перед прогоном. Ниже пути относительно корня репозитория.
+Set GPUs in the YAMLs first. Paths are relative to the repo root.
 
-### GSM8K (500 примеров)
+### GSM8K
 
 ```bash
-python scripts/run_experiment.py configs/final/gsm8k/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gsm8k/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/gsm8k/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gsm8k/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/gsm8k/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/gsm8k/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/gsm8k/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/gsm8k/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
-### MATH-500 (500)
+### MATH-500
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/math500/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/math500/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/math500/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
-### AIME-2026 (30)
+### AIME-2026
 
 ```bash
-python scripts/run_experiment.py configs/final/aime2026/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/aime2026/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/aime2026/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/aime2026/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/aime2026/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/aime2026/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/aime2026/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/aime2026/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
-### ARC-Easy (test 2376; в конфиге `max_examples: null` = все)
+### ARC-Easy
 
 ```bash
-python scripts/run_experiment.py configs/final/arc_easy/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/arc_easy/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/arc_easy/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/arc_easy/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/arc_easy/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/arc_easy/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/arc_easy/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/arc_easy/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
-### GPQA Diamond (~198)
+### ARC-Challenge
 
 ```bash
-python scripts/run_experiment.py configs/final/gpqa_diamond/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gpqa_diamond/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/gpqa_diamond/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gpqa_diamond/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
-### WinoGrande (validation, winogrande_xl)
+### GPQA Diamond
 
 ```bash
-python scripts/run_experiment.py configs/final/winogrande/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/winogrande/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/winogrande/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/winogrande/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
-### PIQA (validation)
+### StrategyQA
 
 ```bash
-python scripts/run_experiment.py configs/final/piqa/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/piqa/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/piqa/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/piqa/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/strategyqa/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/strategyqa/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/strategyqa/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/strategyqa/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+```
+
+### WinoGrande
+
+```bash
+python scripts/run_experiment.py configs/final/winogrande/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/winogrande/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/winogrande/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/winogrande/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+```
+
+### PIQA
+
+```bash
+python scripts/run_experiment.py configs/final/piqa/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/piqa/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/final/piqa/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/piqa/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ---
 
-## Smoke на 10 примерах, контекст 2000 tok
+## Prompts and evaluation
 
-Готовые патчи и батч на двух GPU (очередь **per-GPU**, без коллизий VRAM):
+- **GSM8K / MATH-500 / AIME (single)**: problem + `\boxed{}` in user; assistant opens the thinking block.
+- **AIME**: answer is an integer in 0–999.
+- **ARC / GPQA**: multiple choice, letter `answerKey`.
+- **StrategyQA**: yes/no.
+- **WinoGrande / PIQA**: answer `1` or `2`.
+- **Hybrid plan stage**: `plan_scaffold` handoff, empty closed thinking block.
+- **Hybrid reason stage**: plan in user + open thinking block.
+
+## Context (full runs)
+
+- `max_model_len: 32768`, `max_total_tokens: 32768`, generation up to **30720** tokens (plan capped at 1024).
+- `staged_batch_size`: **500** (gsm8k, math500, arc_*, gpqa, strategyqa, winogrande, piqa), **30** (aime2026).
+
+## NVFP4 and MoE config families
+
+Same benchmark folders, different model stacks:
 
 ```bash
-# Сгенерировать configs/final_validate_ctx2000/*.yaml
-python scripts/run_final_validate_ctx2000.py --dry-run
-
-# Прогон всех 28 (пропуск уже успешных)
-python scripts/run_final_validate_ctx2000.py --resume --gpus 5,7
-
-# Лог: results/final_validate_ctx2000_n10/batch_run_resume.log
-# Сводка: results/final_validate_ctx2000_n10/validation_summary.json
+# examples
+python scripts/run_experiment.py configs/final/math500/qwen8b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_nvfp4/single_nvfp4.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen8b_nvfp4/single_8b_nvfp4.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen8b_nvfp4/hybrid_fp16_nvfp4.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen8b_moe35b_nvfp4/hybrid_fp16_moe35b_nvfp4.yaml -v
 ```
 
-Параметры validate: `max_examples=10`, `max_total_tokens=2000`, `max_model_len=8192`.
-
----
-
-## Промпты и эвал
-
-- **GSM8K / MATH-500 / AIME single**: задача + `\boxed{}` в user; assistant — открытый ``.
-- **AIME**: ответ integer 0–999.
-- **ARC / GPQA**: MCQ, буква `answerKey`.
-- **WinoGrande / PIQA**: ответ `1` / `2`.
-- **Hybrid plan**: `plan_scaffold`, закрытый пустой ``.
-- **Hybrid reason**: план в user + открытый ``.
-
-## Контекст (полные прогоны)
-
-- `max_model_len: 32768`, `max_total_tokens: 32768`, генерация до **30720** tok (plan — 1024).
-- `staged_batch_size`: 500 (gsm8k, math500, gpqa, winogrande, piqa), **30** (aime2026).
-
-## Связь с `final_results/`
-
-Имена run-папок в `final_results/<dataset>/qwen3-32b/`:
-
-- `single_fp16`, `single_gptq2bit`
-- `plan_fp16__reason_fp16`, `plan_fp16__reason_gptq2bit`
+See the root [README](../../README.md) for environment setup and throughput benchmarks.

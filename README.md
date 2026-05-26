@@ -2,19 +2,19 @@
 
 ## Why this project exists
 
-Long reasoning tasks — math, hard QA benchmarks, multi-step chains — are expensive not only in output tokens but also in generation time. The model does not just append a short answer: it builds a plan, performs intermediate steps, self-checks, sometimes loops, or takes a long time before producing a final answer in the required format (e.g. `\boxed{...}`).
+Long reasoning tasks — math, hard QA benchmarks, multi-step chains — are costly not only in output tokens but also in generation time. The model does not simply append a short answer: it builds a plan, runs intermediate steps, self-checks, sometimes loops, or takes a long time before producing a final answer in the required format (e.g. `\boxed{...}`).
 
-This project explores whether such workloads can be sped up via **hybrid execution** of the reasoning trace. You do not have to generate the entire chain with one full-precision model. Different parts of the trace may have different sensitivity to precision:
+This repository explores whether that workload can be sped up via **hybrid execution** of the reasoning trace. You do not have to generate the entire chain with one full-precision model. Different parts of the trace may have different sensitivity to precision:
 
-- planning is better left to a full-precision model;
-- the long main reasoning phase can be delegated to a quantized / low-bit actor;
-- finalization, verification, and escape from loops can again use a more accurate model.
+- **planning** is better left to a full-precision model;
+- the **long main reasoning phase** can be delegated to a quantized / low-bit actor;
+- **finalization, verification, and escape from loops** can again use a more accurate model.
 
 The goal is not abstract “faster vs slower inference”, but **reasoning-pipeline speedup**: where wall-clock, throughput, and token cost improve, and what you pay in accuracy, parse rate, reasoning length, loop failures, commit gap, and other quality signals.
 
-The central object is **`Trace`** (`quantlab/core/trace.py`). For each example, a single reasoning history is built and extended sequentially by different actors. Each actor appends a **`TraceSegment`**: which backend and model produced the chunk, precision mode, token count, pipeline role, and timing when available.
+The central object is **`Trace`** (`quantlab/core/trace.py`). For each example, one reasoning history is built and extended sequentially by different **actors**. Each actor appends a **`TraceSegment`**: which backend and model produced the chunk, precision mode, token count, pipeline role, and — when available — how long generation took.
 
-Between segments there is a **handoff**: the next model either receives the generated trace as a text prefix and does a full prefill, or continues via a lower-level state transfer if the backend supports it. The trace is one coherent solution record, not independent generations.
+Between segments there is a **handoff**: the next model either receives the generated trace as a text prefix and does a full prefill, or continues via a lower-level state transfer if the backend supports it. The trace is one coherent solution record, not a set of independent generations.
 
 After the pipeline finishes, the runner:
 
@@ -24,9 +24,9 @@ After the pipeline finishes, the runner:
 - computes generation-behavior metrics;
 - aggregates per-segment timing.
 
-Results are stored as structured artifacts (`traces.jsonl`, summary tables, metric files) so you can compare full-precision baseline, quantized-only, full → low-bit → full, per-segment vLLM replay, and other schemes.
+Results are stored as structured artifacts (`traces.jsonl`, summary tables, metric files) so you can compare execution schemes: full-precision baseline, quantized-only, full → low-bit → full, per-segment vLLM replay, and other variants.
 
-The rest of this README covers reproducible experiment configs, what lands in `results/`, and how to add metrics, benchmark adapters, actors, and standalone latency replay.
+The rest of this README describes which pipelines are stable to run in practice, what lands in `results/`, and how to add metrics, benchmark adapters, actors, and standalone latency replay.
 
 ## Running the experiments
 
@@ -52,15 +52,17 @@ Before editing YAMLs, set `actors[].backend_kwargs.cuda_visible_devices` to your
 
 ### Config layout
 
-Two families of final configs — nothing else under `configs/` is needed for reproduction:
+Everything lives under `configs/final/<dataset>/`:
 
-| Directory | What it is |
-|-----------|------------|
-| `configs/final/` | Hybrid reasoning baseline: Qwen3-32B FP16 vs GPTQ 2-bit, single- and two-stage variants on 7–9 benchmarks. See [`configs/final/README.md`](configs/final/README.md) for the full matrix and per-dataset commands. |
-| `configs/final_qwen32b_fp16/` | FP16 32B baseline cells for the NVFP4 paper table. |
-| `configs/final_qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 weights + NVFP4 KV at 32k context. |
-| `configs/final_qwen8b_nvfp4/` | Qwen3-8B NVFP4 hybrid / single-stage (FP16 planner). |
-| `configs/final_qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 executor under FP16 planner. |
+| Path | What it is |
+|------|------------|
+| `configs/final/<dataset>/qwen32b_fp16/*.yaml` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
+| `configs/final/<dataset>/qwen32b_gptq2bit/*.yaml` | GPTQ 2-bit single- and hybrid variants |
+| `configs/final/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4, default KV cache |
+| `configs/final/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 + NVFP4 KV at 32k |
+| `configs/final/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 baselines (NVFP4 paper comparison) |
+| `configs/final/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16→32B-NVFP4 hybrid |
+| `configs/final/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + hybrid |
 
 Regenerate the `configs/final/` YAMLs from templates:
 
@@ -87,13 +89,29 @@ python scripts/prepare_strategyqa_data.py
 Single config:
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final_qwen8b_nvfp4/math500/hybrid_fp16_nvfp4.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen8b_nvfp4/hybrid_fp16_nvfp4.yaml -v
 ```
 
 Artifacts land in `results/<category>/<run_id>/` (`traces.jsonl`, `judgements.jsonl`, `summary.json`, …).
 
 Staged hybrid runs unload the planner between waves; vLLM EngineCore children are reaped automatically so the next model fits on the same card.
+
+#### KV cache dtype
+
+For accuracy runs, set vLLM's KV cache type per actor in the YAML:
+
+```yaml
+actors:
+- actor_id: ...
+  backend: vllm
+  backend_kwargs:
+    kv_cache_dtype: nvfp4   # optional; omit = auto (default)
+```
+
+Values: `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`, `nvfp4` (requires vLLM 0.21+). In hybrid configs you can set it independently on the plan and reason actors.
+
+Ready-made pair for 32B NVFP4: `qwen32b_nvfp4/single_nvfp4.yaml` (default KV) vs `qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml` (`kv_cache_dtype: nvfp4`). Details and examples: [configs/final/README.md](configs/final/README.md#kv-cache-dtype-accuracy-runs).
 
 ### Throughput / KV-cache benchmarks
 
@@ -147,8 +165,8 @@ MoE models need bf16 weights under vLLM's FlashInfer backend — don't flip thei
 
 These modes were used in real runs, not just defined in code:
 
-- **MATH-500 hybrid pipeline** (`configs/final/math500/hybrid_fp16_gptq2bit.yaml`): plan on **full BF16 Qwen3-32B**, answer on **2-bit GPTQ** via vLLM; **staged** (plan all examples, then answers), trace/metric persistence, optional resume from wave checkpoints.
-- **Same tasks, full FP16** (`configs/final/math500/hybrid_fp16_fp16.yaml`): both stages on one FP16 model for comparison with hybrid.
+- **MATH-500 hybrid pipeline** (`configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml`): plan on **full BF16 Qwen3-32B**, answer on **2-bit GPTQ** via vLLM; **staged** (plan all examples, then answers), trace/metric persistence, optional resume from wave checkpoints.
+- **Same tasks, full FP16** (`configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml`): both stages on one FP16 model for comparison with hybrid.
 - **Timing from saved traces**: `scripts/replay_timing.py` re-runs segments through vLLM (pin one model or follow `actor_id` from config).
 - On shared-GPU vLLM setups, use reasonable `gpu_memory_utilization` and a working `PATH` (including `ninja` for FlashInfer JIT under `nohup`).
 
@@ -196,7 +214,7 @@ Upload a finished run from saved artifacts:
 python scripts/log_saved_run_to_wandb.py results/<run_id> --project quantlab
 # or reuse wandb settings from a YAML:
 python scripts/log_saved_run_to_wandb.py results/<run_id> \
-  --wandb-config configs/final/math500/hybrid_fp16_fp16.yaml
+  --wandb-config configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml
 ```
 
 ---
@@ -204,7 +222,7 @@ python scripts/log_saved_run_to_wandb.py results/<run_id> \
 ## Running an experiment from YAML
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
 ```
 
 Useful flags:
@@ -222,7 +240,7 @@ Useful flags:
 Limited staged run example:
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/hybrid_fp16_gptq2bit.yaml \
+python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml \
   --staged -v --max-examples 50
 ```
 
@@ -285,7 +303,7 @@ Standalone replay writes per-segment results to `timing_replay/<example_id>.json
 
 ## Pipelines and configs
 
-Canonical reproduction configs live in **`configs/final/`** and **`configs/final_qwen*/`** (see *Running the experiments* above). Legacy dev configs under **`configs/experiments/`** remain for history.
+Canonical reproduction configs live under **`configs/final/`** (see *Running the experiments* above).
 
 Schema: **`quantlab/config/schema.py`** (`ExperimentConfig`, `StageConfig`, `ActorDef`, `OutputConfig`).
 
@@ -368,8 +386,8 @@ pytest tests/ -q
 
 | Task | Where to look |
 |------|----------------|
-| Reproduce hybrid MATH-500 | `configs/final/math500/hybrid_fp16_gptq2bit.yaml` + `-v` |
-| Compare with full FP16 | `configs/final/math500/hybrid_fp16_fp16.yaml` |
+| Reproduce hybrid MATH-500 | `configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml` + `-v` |
+| Compare with full FP16 | `configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml` |
 | Throughput / KV-cache | `scripts/bench_qwen_throughput.py`, *Throughput* section above |
 | Draft batched staged throughput | `staged_batch_size` in YAML or `--staged-batch-size` |
 | Quality in one number | **`summary.json`** — usually **`accuracy`** and **`parse_rate`** |

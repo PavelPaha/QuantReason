@@ -63,14 +63,14 @@ class EchoActor(ActorBase):
 
 
 def main() -> None:
-    cfg_path = "configs/experiments/_smoke_hidden_plan_prompt_n1_gpu1.yaml"
+    cfg_path = "configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml"
     config = ExperimentConfig.model_validate(yaml.safe_load(open(cfg_path)))
     adapter = BenchmarkRegistry.build(config.benchmark.name, benchmark=config.benchmark)
     example = adapter.load(split="test", max_examples=1, seed=42)[0]
 
     stages = [_build_stage(s) for s in config.pipeline]
     actors = {
-        "qwen3_32b_fp16": EchoActor("qwen3_32b_fp16", SegmentRole.PLAN),
+        "qwen3_32b_fp16_plan": EchoActor("qwen3_32b_fp16_plan", SegmentRole.PLAN),
         "qwen3_32b_gptq2bit": EchoActor("qwen3_32b_gptq2bit", SegmentRole.REASONING),
     }
     ex = PipelineExecutor(
