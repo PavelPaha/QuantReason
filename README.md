@@ -1,270 +1,362 @@
-# Многостадийное ускорение reasoning
+# Multi-stage reasoning acceleration
 
-# Зачем нужен этот проект
+## Why this project exists
 
-Длинные reasoning-задачи — математика, сложные QA-бенчмарки, многошаговые рассуждения — дороги не только по числу выходных токенов, но и по времени генерации. Модель не просто дописывает короткий ответ: она строит план, делает промежуточные вычисления, проверяет себя, иногда зацикливается или долго не может перейти к финальному ответу в нужном формате, например `\boxed{...}`.
+Long reasoning tasks — math, hard QA benchmarks, multi-step chains — are expensive not only in output tokens but also in generation time. The model does not just append a short answer: it builds a plan, performs intermediate steps, self-checks, sometimes loops, or takes a long time before producing a final answer in the required format (e.g. `\boxed{...}`).
 
-Идея проекта — исследовать, можно ли ускорить такой режим работы за счёт гибридного исполнения reasoning-траектории. Не обязательно всю цепочку рассуждения генерировать одной full-precision моделью. Возможно, разные участки trace имеют разную чувствительность к точности:
+This project explores whether such workloads can be sped up via **hybrid execution** of the reasoning trace. You do not have to generate the entire chain with one full-precision model. Different parts of the trace may have different sensitivity to precision:
 
-- планирование лучше оставить full-precision модели;
-- длинную основную часть reasoning можно попробовать отдать quantized / low-bit актору;
-- финализацию, проверку и выход из зацикливания снова выполнять более точной моделью.
+- planning is better left to a full-precision model;
+- the long main reasoning phase can be delegated to a quantized / low-bit actor;
+- finalization, verification, and escape from loops can again use a more accurate model.
 
-Цель репозитория — не просто сравнить «инференс быстрее / медленнее» в абстрактном смысле, а измерять именно ускорение reasoning-пайплайна: где возникает выигрыш по wall-clock, throughput и стоимости токенов, и какой ценой это оплачивается с точки зрения accuracy, parse rate, длины рассуждения, loop failures, commit gap и других признаков качества reasoning.
+The goal is not abstract “faster vs slower inference”, but **reasoning-pipeline speedup**: where wall-clock, throughput, and token cost improve, and what you pay in accuracy, parse rate, reasoning length, loop failures, commit gap, and other quality signals.
 
-Главная сущность проекта — `Trace` (`quantlab/core/trace.py`). Для каждого примера строится единая история рассуждения, которая последовательно дополняется разными акторами. Каждый актор добавляет в trace свой `TraceSegment`: какой backend и какая модель генерировали этот фрагмент, в каком режиме точности, сколько токенов было сгенерировано, какую роль выполнял сегмент в пайплайне и, если доступно, сколько времени заняла генерация.
+The central object is **`Trace`** (`quantlab/core/trace.py`). For each example, a single reasoning history is built and extended sequentially by different actors. Each actor appends a **`TraceSegment`**: which backend and model produced the chunk, precision mode, token count, pipeline role, and timing when available.
 
-Между сегментами происходит handoff: следующая модель либо получает уже сгенерированную часть trace как обычный текстовый префикс и делает полный prefill, либо продолжает работу через более низкоуровневый механизм передачи состояния, если backend это поддерживает. В результате trace становится связной записью всего решения, а не набором независимых генераций.
+Between segments there is a **handoff**: the next model either receives the generated trace as a text prefix and does a full prefill, or continues via a lower-level state transfer if the backend supports it. The trace is one coherent solution record, not independent generations.
 
-После завершения пайплайна по trace запускаются:
+After the pipeline finishes, the runner:
 
-- извлечение финального ответа;
-- judge для конкретного бенчмарка;
-- стандартные метрики качества;
-- дополнительные метрики поведения генерации;
-- сбор timing-статистики по сегментам.
+- extracts the final answer;
+- runs the benchmark-specific judge;
+- computes standard quality metrics;
+- computes generation-behavior metrics;
+- aggregates per-segment timing.
 
-Все результаты сохраняются в структурированные артефакты, например `traces.jsonl`, summary-таблицы и файлы с метриками. Это позволяет сравнивать разные схемы исполнения: full-precision baseline, quantized-only, full → low-bit → full, replay отдельных сегментов через vLLM и другие варианты.
+Results are stored as structured artifacts (`traces.jsonl`, summary tables, metric files) so you can compare full-precision baseline, quantized-only, full → low-bit → full, per-segment vLLM replay, and other schemes.
 
-Дальше в этом README описано, какие пайплайны уже стабильно запускаются, что появляется в `results/`, как подключать новые метрики, benchmark adapters, actors и отдельный latency replay.
-## Что уже отлажено на практике
+The rest of this README covers reproducible experiment configs, what lands in `results/`, and how to add metrics, benchmark adapters, actors, and standalone latency replay.
 
-Это не теория из кода — эти режимы реально использовались при прогонах:
+## Running the experiments
 
-- **MATH-500, hybrid пайплайн** (`configs/experiments/math500_qwen_hybrid.yaml`): стадия плана на **полном BF16 Qwen3-32B**, стадия ответа на **2-bit GPTQ** через vLLM; **staged** (сначала план для всех примеров, затем ответы), сохранение трасс и метрик, при необходимости — докачка после чекпоинта волны.
-- **Тот же набор задач, полностью FP16** (`math500_qwen3_32b_fp16_plan_answer.yaml`): две стадии на **одной** FP16 модели для сравнения с hybrid.
-- **Мини-прогон 2-bit + micro-batch** (`math500_mini_2bit_n4_batch2.yaml`): проверка `staged_batch_size` и формата артефактов.
-- **Замеры времени по сохранённым traces**: скрипт `scripts/replay_timing.py` отдельно прогоняет сегменты через vLLM (можно фиксировать одну модель или держаться `actor_id` из конфига).
-- В окружении для vLLM на shared GPU нужен разумный `gpu_memory_utilization` и рабочий `PATH` (в т.ч. `ninja` для JIT FlashInfer при `nohup`).
+What you need to reproduce the paper runs: final YAML configs, how to launch quality sweeps and throughput benchmarks, and which library versions were used.
 
-### Hybrid vs FP16-план‑ответ на одном срезе (n=50, `seed=42`)
+Plotting scripts are **not** in the repo — read JSON/CSV from `results/` and draw whatever you want.
 
-На сохранённых прогонах **hybrid** (`math500_qwen_hybrid.yaml`, план BF16 → ответ **2-bit**) и **FP16 baseline** (`math500_qwen3_32b_fp16_plan_answer.yaml`, те же две стадии, но **обе на одной Qwen3-32B FP16**) разница в **accuracy** и **parse_rate** выглядит «не в пользу большой модели», но статистика указывает в первую очередь на **формат выдачи судьё**, а не на «глупость» полной точности как таковой: у базовой схемы вторая стадия очень часто **упирается в лимит `max_new_tokens: 4096`**, текст обрывается **до финального `\boxed{…}`**, и judge помечает пример как **`parse_success = false`** (частые длинные «перепроверки» перед ответом). У hybrid второй актёр задаёт другую траекторию рассуждения и типичную длину ответной части, поэтому **частота успешного извлечения ответа выше**.
+### Hardware & stack
 
-**Про температуру:** в обоих конфигурациях включена **`temperature: 0.0`** (нейтральный жадный режим без лишней стохастики). То есть наблюдаемое расхождение **не описывают «разные температуры между прогонами»**. В качестве интуитивной связки: температура в целом **увеличивает разброс длины и «болтовни»**, и при том же верхнем пределе токенов **более высокая температура чаще довела бы текст чаще или реже до `\boxed{}`**, здесь же эффект сильнее задаёт связка **`max_new_tokens` + паттерны генерации второй модели** (полная против квантованной), а не сэмплирование.
+Single 8×B200 box (183 GB per card, CUDA 12.9 driver). Python 3.11.
 
-Про **передачу KV-кеша между разными моделями** и «настоящий» KV-handoff между волнами — **отдельно не валидировали** в рамках этих прогонов. В репозитории есть намёки в коде и пример конфига (`kv_cache_handoff.yaml`), но для отчётов и сравнений сейчас опирались на **full_prefill** (полный текст в промпте на следующей стадии).
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-vllm-cu130.txt   # vLLM 0.21 — has nvfp4 KV
+pip install -e .
+source scripts/vllm_env.sh                   # puts vLLM's libcudart on PATH
+```
+
+Pinned versions live in `requirements-vllm-cu130.txt` (vLLM **0.21.0**, torch 2.11+cu130, transformers 5.8). `requirements-vllm-cu124.txt` is an older stack without `--kv-cache-dtype nvfp4`.
+
+Before editing YAMLs, set `actors[].backend_kwargs.cuda_visible_devices` to your GPU ids.
+
+### Config layout
+
+Two families of final configs — nothing else under `configs/` is needed for reproduction:
+
+| Directory | What it is |
+|-----------|------------|
+| `configs/final/` | Hybrid reasoning baseline: Qwen3-32B FP16 vs GPTQ 2-bit, single- and two-stage variants on 7–9 benchmarks. See [`configs/final/README.md`](configs/final/README.md) for the full matrix and per-dataset commands. |
+| `configs/final_qwen32b_fp16/` | FP16 32B baseline cells for the NVFP4 paper table. |
+| `configs/final_qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 weights + NVFP4 KV at 32k context. |
+| `configs/final_qwen8b_nvfp4/` | Qwen3-8B NVFP4 hybrid / single-stage (FP16 planner). |
+| `configs/final_qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 executor under FP16 planner. |
+
+Regenerate the `configs/final/` YAMLs from templates:
+
+```bash
+python scripts/generate_final_configs.py
+```
+
+### Data
+
+Benchmark JSON/parquet for ARC, PIQA, WinoGrande, and AIME are committed under `data/`. GSM8K and MATH-500 load from HuggingFace at runtime.
+
+One-time prep if you need to refresh vendored files:
+
+```bash
+python scripts/sync_aime2026_data.py
+python scripts/prepare_arc_easy_data.py
+python scripts/prepare_piqa_data.py
+python scripts/prepare_winogrande_data.py
+python scripts/prepare_strategyqa_data.py
+```
+
+### Quality / accuracy runs
+
+Single config:
+
+```bash
+python scripts/run_experiment.py configs/final/math500/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/final_qwen8b_nvfp4/math500/hybrid_fp16_nvfp4.yaml -v
+```
+
+Artifacts land in `results/<category>/<run_id>/` (`traces.jsonl`, `judgements.jsonl`, `summary.json`, …).
+
+Staged hybrid runs unload the planner between waves; vLLM EngineCore children are reaped automatically so the next model fits on the same card.
+
+### Throughput / KV-cache benchmarks
+
+Entry point: `scripts/bench_qwen_throughput.py`. Loads any model from the built-in catalogue (`--list-models`), runs MATH-500 prompts at the batch size, `max_new_tokens`, and `--kv-cache-dtype` you pass (`auto`, `fp8`, `nvfp4`, …).
+
+```bash
+python scripts/bench_qwen_throughput.py \
+    --model "Qwen/Qwen3-32B" \
+    --batch-mode max \
+    --max-num-seqs-max 8 \
+    --n-prompts 16 \
+    --max-new-tokens 32768 \
+    --max-model-len 36864 \
+    --kv-cache-dtype auto \
+    --gpu 0 \
+    --gpu-memory-utilization 0.85 \
+    --no-enforce-eager --warmup 2 --no-isolated \
+    --output-dir results/perf_batch_kv/bs8_kvauto_mnt32768
+```
+
+The number you want is `throughput_tokens_per_sec` in the output JSON.
+
+Launch scripts wrap the paper sweeps:
+
+| Script | Sweep |
+|--------|-------|
+| `scripts/launch_perf_h1h5.sh` | BS=1, context × KV dtype (H1–H5) |
+| `scripts/launch_8b_bs1_sweep.sh` | BS=1 for 8B model family |
+| `scripts/launch_batch_kv_sweep.sh` | BS=8, mnt=32k, dense models × KV dtypes |
+| `scripts/launch_moe_kv_sweep.sh` | Same for MoE models |
+| `scripts/launch_capacity_sweep.sh` | Max batch that fits per (model, KV dtype) |
+| `scripts/launch_perf_nvfp4_kv.sh` | 32B NVFP4 × {auto, fp8, nvfp4} at BS=1 |
+| `scripts/launch_perf_queue.sh` | Sequential queue on free GPUs |
+
+Example full perf section (~6 h on 8×B200):
+
+```bash
+source scripts/vllm_env.sh
+bash scripts/launch_perf_h1h5.sh 0 "Qwen/Qwen3-32B"    # per (gpu, model)
+bash scripts/launch_8b_bs1_sweep.sh
+bash scripts/launch_batch_kv_sweep.sh
+bash scripts/launch_capacity_sweep.sh
+bash scripts/launch_moe_kv_sweep.sh
+```
+
+Perf sweeps use `--no-isolated` (reuse one Python process). Quality runs keep the default isolated mode.
+
+MoE models need bf16 weights under vLLM's FlashInfer backend — don't flip their `precision` to fp16.
+
+## What has been exercised in practice
+
+These modes were used in real runs, not just defined in code:
+
+- **MATH-500 hybrid pipeline** (`configs/final/math500/hybrid_fp16_gptq2bit.yaml`): plan on **full BF16 Qwen3-32B**, answer on **2-bit GPTQ** via vLLM; **staged** (plan all examples, then answers), trace/metric persistence, optional resume from wave checkpoints.
+- **Same tasks, full FP16** (`configs/final/math500/hybrid_fp16_fp16.yaml`): both stages on one FP16 model for comparison with hybrid.
+- **Timing from saved traces**: `scripts/replay_timing.py` re-runs segments through vLLM (pin one model or follow `actor_id` from config).
+- On shared-GPU vLLM setups, use reasonable `gpu_memory_utilization` and a working `PATH` (including `ninja` for FlashInfer JIT under `nohup`).
+
+### Hybrid vs FP16 plan–answer on one slice (n=50, `seed=42`)
+
+On saved runs, **hybrid** (BF16 plan → **2-bit** answer) and **FP16 baseline** (same two stages, both on **Qwen3-32B FP16**) can show **accuracy** / **parse_rate** that look “against” the larger model. The gap is mostly about **judge output format**, not full precision being worse per se: the baseline’s second stage often hits **`max_new_tokens: 4096`**, text stops **before** final `\boxed{…}`, and the judge marks **`parse_success = false`** (long “re-check” loops before answering). Hybrid’s second actor follows a different trajectory and typical answer length, so **successful answer extraction is more frequent**.
+
+**Temperature:** both configs use **`temperature: 0.0`** (greedy, no extra stochasticity). The observed gap is **not** “different temperatures between runs”. Intuition: higher temperature generally **increases length variance and verbosity**; with the same token cap it might change how often `\boxed{}` appears. Here the effect is dominated by **`max_new_tokens` + second-stage generation patterns** (full vs quantized), not sampling.
+
+**KV cache transfer between different models** and true cross-wave KV handoff were **not validated** in these runs. The repo has hints and an example config (`kv_cache_handoff.yaml`), but reported comparisons rely on **`full_prefill`** (full text in the prompt on the next stage).
 
 ---
 
-## Установка
+## Optional: Weights & Biases logging
 
-Требования: Python **≥ 3.10** (см. `pyproject.toml`).
-
-```bash
-cd quantlab   # корень этого репозитория
-pip install -e .
-# для экспериментов с vLLM (рекомендуется отдельное окружение)
-pip install -e ".[vllm]"
-# для логирования в Weights & Biases
-pip install -e ".[wandb]"
-```
-
-Дополнительно под конкретные квантования: `[gptq]`, `[awq]`, `[bnb]`, `[aqlm]` — по необходимости.
-
-### Опционально: логирование в Weights & Biases
-
-В конфиг можно добавить блок:
+Add a block to the config:
 
 ```yaml
 wandb:
   enabled: true
   project: quantlab
-  entity: your-team   # опционально
+  entity: your-team   # optional
   group: math500
   tags: ["hybrid", "math500"]
-  mode: online        # или offline
+  mode: online        # or offline
   progress_log_interval: 10
   log_per_example_table: true
   per_example_table_key: per_example_metrics
   upload_run_artifact: false
 ```
 
-Тогда раннер:
+Then the runner:
 
-- пишет в W&B сводные метрики по прогону;
-- дублирует числовые поля из `summary.json` в scalar-метрики `summary/*`, чтобы было удобно
-  сравнивать разные эксперименты между собой в charts / workspace;
-- ведёт progress-лог по мере обработки примеров;
-- в конце прикладывает таблицу по всем задачам (`example_id`, `experiment_name`, `run_id`,
-  judgement-поля и per-example метрики);
-- по желанию загружает всю папку прогона как artifact.
+- logs run-level metrics to W&B;
+- mirrors numeric fields from `summary.json` as `summary/*` scalars for cross-run charts;
+- streams progress as examples are processed;
+- attaches a per-example table at the end (`example_id`, `experiment_name`, `run_id`, judgement fields, per-example metrics);
+- optionally uploads the whole run folder as an artifact.
 
-Если `wandb` не установлен или блок `wandb:` отсутствует в конфиге, локальный прогон всё равно
-отрабатывает как раньше: сохраняются обычные артефакты в `results/<run_id>/`, а внешнее
-логирование просто не используется.
+If `wandb` is not installed or the `wandb:` block is missing, local runs behave as before: artifacts go to `results/<run_id>/` and external logging is skipped.
 
-Уже завершённый прогон тоже можно дозалить в W&B по сохранённым артефактам:
+Upload a finished run from saved artifacts:
 
 ```bash
 python scripts/log_saved_run_to_wandb.py results/<run_id> --project quantlab
-# либо взять настройки из YAML с блоком wandb:
+# or reuse wandb settings from a YAML:
 python scripts/log_saved_run_to_wandb.py results/<run_id> \
-  --wandb-config configs/experiments/math500_qwen_hybrid.yaml
+  --wandb-config configs/final/math500/hybrid_fp16_fp16.yaml
 ```
 
 ---
 
-## Запуск эксперимента из YAML
+## Running an experiment from YAML
 
 ```bash
-python scripts/run_experiment.py configs/experiments/math500_qwen_hybrid.yaml -v
+python scripts/run_experiment.py configs/final/math500/hybrid_fp16_fp16.yaml -v
 ```
 
-Полезные флаги:
+Useful flags:
 
-| Флаг | Смысл |
-|------|--------|
-| `-v`, `--verbose` | Подробный лог в консоль |
-| `--max-examples N` | Перебить `benchmark.max_examples` в YAML |
-| `--output-dir DIR` | Куда складывать `results/` (по умолчанию из YAML) |
-| `--staged` / `--no-staged` | Волновой режим: все примеры проходят стадию 0, затем стадию 1, … Перекрывает `staged_execution` в YAML |
-| `--staged-batch-size K` | vLLM micro-batch по **каждой волне** (K≥2): быстрее throughput, см. ниже про `timing` |
-| `--resume-run-id ID` | Продолжить прогон в той же папке `results/<ID>/` |
-| `--resume-after-wave W` | Staged: волна W **полностью** завершена для всех примеров (старт с W+1). Без флага — авто по последнему `trace_checkpoints/wave_*.jsonl`, в т.ч. дозапуск прерванной волны |
+| Flag | Meaning |
+|------|---------|
+| `-v`, `--verbose` | Verbose console log |
+| `--max-examples N` | Override `benchmark.max_examples` in YAML |
+| `--output-dir DIR` | Base directory for `results/` (default from YAML) |
+| `--staged` / `--no-staged` | Wave mode: all examples finish stage 0, then stage 1, … Overrides `staged_execution` in YAML |
+| `--staged-batch-size K` | vLLM micro-batch **per wave** (K≥2): higher throughput; see timing caveat below |
+| `--resume-run-id ID` | Continue in the same `results/<ID>/` folder |
+| `--resume-after-wave W` | Staged: wave W is **fully** done for all examples (start at W+1). Without the flag — auto from latest `trace_checkpoints/wave_*.jsonl`, including resuming a partial wave |
 
-Пример ограниченного прогона с staged:
+Limited staged run example:
 
 ```bash
-python scripts/run_experiment.py configs/experiments/math500_qwen_hybrid.yaml \
+python scripts/run_experiment.py configs/final/math500/hybrid_fp16_gptq2bit.yaml \
   --staged -v --max-examples 50
 ```
 
-В логах появится `run_id=…` и путь вида `results/<run_id>/`.
+Logs will show `run_id=…` and a path like `results/<run_id>/`.
 
-**Продолжить прерванный прогон (без staged):** если часть примеров уже есть в `traces.jsonl` / `judgements.jsonl`, укажите тот же `output.base_dir` и прежний `run_id`:
+**Resume interrupted run (non-staged):** if some examples already exist in `traces.jsonl` / `judgements.jsonl`, use the same `output.base_dir` and previous `run_id`:
 
 ```bash
 python scripts/run_experiment.py path/to/cfg.yaml -v \
   --resume-run-id 20260519_101131_52f75c
 ```
 
-Новые результаты дописываются в те же jsonl; `summary.json` пересчитывается в конце по всем judgements.
+New rows append to the same jsonl files; `summary.json` is recomputed at the end from all judgements.
 
-**Staged (прервана волна / stage):** при `staged_wave_checkpoints: true` чекпоинт `trace_checkpoints/wave_<n>.jsonl` обновляется после каждого примера. Продолжение:
+**Staged (interrupted wave / stage):** with `staged_wave_checkpoints: true`, `trace_checkpoints/wave_<n>.jsonl` updates after each example. Resume:
 
 ```bash
 python scripts/run_experiment.py path/to/cfg.yaml --staged -v \
   --resume-run-id 20260512_012442_a81368
 ```
 
-Раннер подхватит последний `wave_*.jsonl`, доделает незавершённые примеры на текущем stage и пойдёт дальше по волнам. Явно указать последнюю **полностью** завершённую волну: `--resume-after-wave W`.
+The runner picks up the latest `wave_*.jsonl`, finishes incomplete examples on the current stage, then continues waves. To pin the last **fully** completed wave: `--resume-after-wave W`.
 
-### Как при этом загружаются модели (по умолчанию)
+### How models are loaded (default)
 
-В типичном **staged**-прогоне (флаг `--staged` или `staged_execution: true` в YAML) исполнитель идёт **волнами по глубине пайплайна**, а не «пример за примером насквозь»:
+In a typical **staged** run (`--staged` or `staged_execution: true` in YAML), execution proceeds **by pipeline depth**, not example-by-example end-to-end:
 
-1. **Волна 0** — для **всех** выбранных примеров выполняется первая стадия (например, план) **одним и тем же актёром/моделью** на этой стадии.
-2. Если в конфиге включено **`staged_unload_between_waves: true`** (так часто ставят под одну видеокарту), между волнами вызывается **выгрузка** загруженных актёров, чтобы освободить память под следующую модель.
-3. **Волна 1** — для тех же примеров подхватываются уже сохранённые частичные трассы и выполняется вторая стадия (**например, полный ответ другой моделью** — в hybrid это как раз переход BF16-планировщика → 2-bit решающий актёр).
+1. **Wave 0** — first stage (e.g. plan) for **all** selected examples with **one actor/model**.
+2. If **`staged_unload_between_waves: true`** (common on a single GPU), actors are **unloaded** between waves to free memory for the next model.
+3. **Wave 1** — partial traces are loaded and the second stage runs (e.g. full answer with another model — hybrid BF16 planner → 2-bit solver).
 
-Итого: в проверенных сценариях модели используются **последовательно по времени** — сначала «план ко всем задачам», потом разгрузились и загрузилась другая машина под «решение ко всем задачам». Это упрощает жизнь на **одном** GPU без одновременного удержания двух тяжёлых весов.
+So in validated setups, models run **sequentially in time**: “plan all tasks”, unload, load another weights set for “solve all tasks”. That avoids holding two heavy checkpoints on **one** GPU.
 
-**Параллельно держать две разные модели** (разные процессы, два движка vLLM, разные карты через `cuda_visible_devices` у разных актёров, возможно TP) в принципе можно задумать как оптимизацию (меньше перезагрузок весов). Сейчас этот режим в рамках наших отчётов **специально не отлаживали**: нужно аккуратно **раскидывать GPU**, следить за OOM и поведением vLLM, поэтому в README описан только понятный **пошагово-волновой** вариант.
-
----
-
-## Что сохраняется в `results/<run_id>/` (артефакты)
-
-Типичный набор (`quantlab/artifacts/store.py`):
-
-| Файл / папка | Назначение |
-|--------------|------------|
-| `config.json` | Замороженный конфиг прогона (акторы, пайплайн, бенчмарк); для replay и воспроизводимости |
-| `traces.jsonl` | По одному JSON на пример: `prompt`, `segments[]` с текстом, `token_count`, `actor_id`, `role`, **`timing`** (если бэкенд отдал статистику) |
-| `judgements.jsonl` | Извлечённый ответ, `is_correct`, `parse_success`, ground truth |
-| `metrics.jsonl` | Одна строка метрик на пример (accuracy, reasoning_length, токены по актёрам, агрегаты по времени — см. секцию метрик ниже) |
-| `timing.jsonl` | Сводка по времени по `actor_id` на пример (агрегация из сегментов) |
-| `errors.jsonl` | Трейсбек при падении на примере |
-| `summary.json` | `n_examples`, `n_judged`, средняя accuracy / parse_rate |
-| `trace_checkpoints/` | Если включены чекпоинты staged: `wave_0.jsonl`, `wave_1.jsonl`, … — частичные трассы после каждой волны |
-
-Выборочные **полностью успешные** прогоны (полный комплект файлов для снимка) при необходимости кладём в дерево **`results/`** под конкретным `run_id` и заносим их в версионирование по списку в **`results/README.md`**.
-
-Опционально в конфиге: `timing_replay` включит прогон replay из раннера в подпапку (см. схему в `ExperimentConfig`).
-
-Replay **отдельным** скриптом складывает per-segment результаты в `timing_replay/<example_id>.json` (см. ниже).
+**Keeping two different models loaded in parallel** (separate processes, two vLLM engines, different cards via per-actor `cuda_visible_devices`, possibly TP) is possible in principle but **was not tuned for reporting**: GPU placement, OOM, and vLLM behavior need care. This README documents the **wave-by-wave** path only.
 
 ---
 
-## Пайплайны и конфиги
+## What is saved in `results/<run_id>/` (artifacts)
 
-- Примеры готовых сценариев: **`configs/experiments/`**  
-  — `math500_qwen_hybrid.yaml` — основной hybrid MATH;  
-  — `math500_qwen3_32b_fp16_plan_answer.yaml` — baseline FP16, две стадии;  
-  — батчевая версия с суффиксом `_batch`;  
-  — `math500_mini_2bit_n4_batch2.yaml` — маленький smoke с 2-bit и batch 2.
+Typical set (`quantlab/artifacts/store.py`):
 
-Схема полей эксперимента: **`quantlab/config/schema.py`** (`ExperimentConfig`, `StageConfig`, `ActorDef`, `OutputConfig`).
+| File / folder | Purpose |
+|---------------|---------|
+| `config.json` | Frozen run config (actors, pipeline, benchmark); for replay and reproducibility |
+| `traces.jsonl` | One JSON per example: `prompt`, `segments[]` with text, `token_count`, `actor_id`, `role`, **`timing`** (if backend provided stats) |
+| `judgements.jsonl` | Extracted answer, `is_correct`, `parse_success`, ground truth |
+| `metrics.jsonl` | One metrics row per example (accuracy, reasoning_length, per-actor tokens, timing aggregates — see metrics below) |
+| `timing.jsonl` | Per-example timing summary by `actor_id` (aggregated from segments) |
+| `errors.jsonl` | Traceback when an example fails |
+| `summary.json` | `n_examples`, `n_judged`, mean accuracy / parse_rate |
+| `trace_checkpoints/` | If staged checkpoints enabled: `wave_0.jsonl`, `wave_1.jsonl`, … — partial traces after each wave |
 
-На одной стадии задаются: `actor_id`, `stage_prompt`, `max_new_tokens`, `stop_sequences`, `exit_conditions` (условие переключения на следующую стадию), `handoff_mode`. Для текущих MATH500-прогонов использовался **`full_prefill`**: следующий актёр видит весь текст, KV между **разными** моделями не переносился.
+Select **fully successful** runs can be kept under `results/<run_id>/` for snapshots; see `results/README.md` for what is versioned.
+
+Optional in config: `timing_replay` runs replay from the runner into a subfolder (see `ExperimentConfig`).
+
+Standalone replay writes per-segment results to `timing_replay/<example_id>.json` (see below).
 
 ---
 
-## Метрики и время
+## Pipelines and configs
 
-### Как включаются
+Canonical reproduction configs live in **`configs/final/`** and **`configs/final_qwen*/`** (see *Running the experiments* above). Legacy dev configs under **`configs/experiments/`** remain for history.
 
-Список метрик задаётся в YAML блоком **`metrics`** — каждая строка вида `- name: <имя>`; при необходимости добавляют **`kwargs`** (см. `MetricConfig` в `quantlab/config/schema.py`). Реестр имён → классы в **`quantlab/metrics/registry.py`**; полный список имён в коде: `MetricRegistry.available()`.
+Schema: **`quantlab/config/schema.py`** (`ExperimentConfig`, `StageConfig`, `ActorDef`, `OutputConfig`).
 
-Вычисление идёт **на каждый пример после сбора трассы**: вход — `Trace` и результат **`JudgementResult`** из `quantlab/evaluation/judge.py` (извлечение ответа из текста, в т.ч. `\boxed{}`, сравнение с эталоном). Числовые результаты пишутся в **`metrics.jsonl`** строкой вида `{ "example_id": "...", "<metric_name>": ... }`; итоги по точности см. **`summary.json`**.
+Per stage you set: `actor_id`, `stage_prompt`, `max_new_tokens`, `stop_sequences`, `exit_conditions`, `handoff_mode`. Current MATH-500 runs use **`full_prefill`**: the next actor sees full text; KV is **not** transferred between different models.
 
-На практике для MATH-500 запускался набор как в **`configs/experiments/math500_qwen_hybrid.yaml`**: смешение качества (**accuracy**, **parse_rate**), объёма и «поведения» рассуждения, распределение токенов по актёрам и агрегаты времени по сегментам (ниже таблица).
+---
 
-Таблица ниже перечисляет **весь реестр**; конкретный YAML может включить подмножество. По одному примеру удобно сопоставлять **`judgements.jsonl`** (этикетки judge’а и извлечённый текст) и **`metrics.jsonl`**.
+## Metrics and timing
 
-### Как интерпретировать прогоны (типичный гибрид)
+### Enabling metrics
 
-- **Главное по качеству:** **`accuracy`** даёт ту же истину для агрегата, что и поле **`is_correct`** в **`judgements.jsonl`** для строки с тем же **`example_id`**. **`parse_rate`** соответствует **`parse_success`**: задача решена верно только при успешном извлечении финального ответа; низкая **parse_rate** часто означает обрывы, «грязный» формат или отсутствие `\boxed{}`, а не «ошибку в математике» как таковой.
-- **Масштаб рассуждения:** **`reasoning_length`** и **`actor_token_split`** — сколько токенов ушло в целом и какая доля на планирующего актёра (BF16) против отвечающего (например 2-bit). Это нужно связывать с качеством: длиннее не всегда лучше.
-- **Структура и «накрутки»:** **`think_closed`** (закрыт ли think-блок), **`commit_gap`** и **`tokens_to_first_correct` / `finish_commit`** описывают, насколько рано модель якобы «зафиксировала» ответ и есть ли типичная структура с `\boxed{}`. **`verification_spiral`**, **`loop_detected`** и **`loop_onset_tokens`** — эвристики зацикливания и «перепроверок» после кандидата ответа; полезно смотреть на подмножестве ошибок (**`accuracy`** = 0).
-- **Скорость и инференс:** **`total_generation_ms`**, **`segment_timing_ms`**, **`tokens_per_second`** привязаны к сегментам и актёрам; для батча см. предупреждение ниже. Сырые ряды времени параллельны **`timing.jsonl`**.
+List metrics in YAML under **`metrics`** — each entry `- name: <name>`; optional **`kwargs`** (see `MetricConfig` in `quantlab/config/schema.py`). Registry: **`quantlab/metrics/registry.py`**; all names: `MetricRegistry.available()`.
 
-**`exact_match`** и **`stop_token_probe`** в реестре есть, но в hybrid-конфиге по умолчанию **не включены**; включайте в YAML явно при необходимости.
+Metrics run **per example after the trace is complete**, from `Trace` and **`JudgementResult`** (`quantlab/evaluation/judge.py` — answer extraction including `\boxed{}`, comparison to reference). Values go to **`metrics.jsonl`** as `{ "example_id": "...", "<metric_name>": ... }`; run-level accuracy in **`summary.json`**.
 
-### Справочник метрик
+Hybrid MATH-500 configs typically mix **accuracy**, **parse_rate**, reasoning volume/behavior, per-actor token split, and segment timing (table below).
 
-| Имя | Смысл (кратко) |
-|-----|----------------|
-| **`accuracy`** | `1`, если judge пометил ответ как верный (`is_correct`), иначе `0`. |
-| **`parse_rate`** | `1`, если финальный ответ удалось надёжно извлечь из генерации (`parse_success` в judgement). |
-| **`exact_match`** | Точное совпадение строк `predicted` и эталона (после `strip`; жёстче обычного judge). |
-| **`reasoning_length`** | Общее число **сгенерированных** токенов по трасе (`total_generated_tokens`). |
-| **`loop_detected`** | Эвристика «цикл» по **единицам-предложениям**: подряд одно и то же предложение ≥N раз **или** глобально одна и та же фраза встретилась ≥M раз (с опциональным фильтром «hesitation», см. докстринг в `generation.py` и kwargs в YAML). |
-| **`think_closed`** | Для разметки Qwen-сессий: есть ли парный закрывающий тег мысли в генерации после открытия в промпте/ответе (`<think>` / закрывающие теги в коде задаются параметрами). |
-| **`commit_gap`** | Сколько **токенов** условно осталось после **первого** появления кандидата ответа (поиск `\boxed`-подобного паттерна). `-1`, если паттерна нет — прокси «как поздно зафиксировали ответ». |
-| **`tokens_to_first_correct`** | Прокси **TTFA**: примерное число токенов до **первого** вхождения извлечённого **верного** ответа в текст (пересчёт по доле символов, не точные позиции токенизатора). `-1`, если задача решена неправильно или подстрока не найдена. |
-| **`finish_commit`** | Бинарный прокси: ответ уже «светится» текстом **до** первого `\boxed` и при этом парсинг `\boxed{}` успешен (ограничения есть, см. докстринг). |
-| **`verification_spiral`** | Счётчик фраз «перепроверки» (wait / let me check / correction и т.д.) в **суффиксе** после первого вхождения предсказанного ответа (или по всей генерации fallback). |
-| **`loop_onset_tokens`** | Примерный индекс токена начала проблемной «петли» (минимальный из триггеров streak / global-repeat, по тому же пайплайну, что и `loop_detected`). `-1`, если триггеров не было или трасса пуста. |
-| **`actor_token_split`** | **`dict`** `actor_id → число токенов`: сколько сгенерировал каждый актёр (например планирующая BF16 модель против 2-bit ответов). |
-| **`total_generation_ms`** | Сумма **`total_ms`** по всем сегментам, где есть `timing` — чистое «замеры из бэкенда» на уровень примера. |
-| **`segment_timing_ms`** | **`dict`** `actor_id → суммарное ms генерации по сегментам этого актёра`. |
-| **`tokens_per_second`** | **`dict`** `actor_id → tok/s` по актёру: сумма токенов сегментов / суммарное время по ним (агрегированная скорость, не усреднение по сегментам). |
-| **`stop_token_probe`** | Заглушка колонки под будущую интеграцию логитов EOS; сейчас возвращает фиксированную строку (см. `StopTokenProbeMetric`). |
+The table lists the **full registry**; a given YAML may enable a subset. Match **`judgements.jsonl`** (judge labels and extracted text) with **`metrics.jsonl`** by **`example_id`**.
 
-Отдельно в **`timing.jsonl`** дублируется укрупнённое время по `actor_id` при сохранении прогона (см. `quantlab/runner.py` `_record_example`) — это близко к **`segment_timing_ms`**, но в плоском JSONL на файл.
+### Interpreting runs (typical hybrid)
 
-### Время из прогона
+- **Quality:** **`accuracy`** matches aggregate **`is_correct`** in **`judgements.jsonl`**. **`parse_rate`** matches **`parse_success`**: a correct score requires successful final-answer extraction; low parse rate often means truncation, messy format, or missing `\boxed{}`, not necessarily wrong math.
+- **Reasoning scale:** **`reasoning_length`** and **`actor_token_split`** — total tokens and planner (BF16) vs answerer (e.g. 2-bit) share; longer is not always better.
+- **Structure / loops:** **`think_closed`**, **`commit_gap`**, **`tokens_to_first_correct`**, **`finish_commit`** — how early the model “commits” and whether `\boxed{}` structure appears. **`verification_spiral`**, **`loop_detected`**, **`loop_onset_tokens`** — loop / re-check heuristics; inspect on errors (**`accuracy`** = 0).
+- **Speed:** **`total_generation_ms`**, **`segment_timing_ms`**, **`tokens_per_second`** — per segment/actor; for batches see caveat below. Raw timing also in **`timing.jsonl`**.
 
-- В каждом **сегменте** trace может быть объект **`timing`** (prefill/decode/total_ms, tokens/s) — когда vLLM отдаёт `FinishedRequestStats` и мы их сматчили.
-- **`timing.jsonl`** дублирует агрегаты по `actor_id` на уровень примера для быстрых отчётов.
+**`exact_match`** and **`stop_token_probe`** exist in the registry but are **off by default** in hybrid configs; enable in YAML if needed.
 
-**Важно для `staged_batch_size ≥ 2`:** несколько промптов уходят в один batched вызов vLLM. Тогда числа в `timing` для сегментов либо приходят **с per-request статистикой vLLM**, либо в худшем случае — грубо как **равный кусок wall-time батча** (см. `VLLMBackend.generate_batch`). Для **честных сравнений латентности** ориентируйтесь на отдельный replay (один запрос за раз), а не на raw timing из батчевого прогона.
+### Metric reference
 
-### Replay замеров по уже сохранённым traces
+| Name | Meaning (short) |
+|------|-----------------|
+| **`accuracy`** | `1` if judge marked correct (`is_correct`), else `0`. |
+| **`parse_rate`** | `1` if final answer was extracted reliably (`parse_success`). |
+| **`exact_match`** | Exact string match of `predicted` and reference (after `strip`; stricter than default judge). |
+| **`reasoning_length`** | Total **generated** tokens in the trace (`total_generated_tokens`). |
+| **`loop_detected`** | Loop heuristic on **sentence units**: same sentence ≥N times in a row **or** same phrase ≥M times globally (optional “hesitation” filter — see `generation.py` and YAML kwargs). |
+| **`think_closed`** | For Qwen-style sessions: paired closing think tag after open tag in prompt/generation. |
+| **`commit_gap`** | Approximate **tokens** after **first** answer-candidate pattern (`\boxed`-like). `-1` if none — proxy for late commit. |
+| **`tokens_to_first_correct`** | **TTFA** proxy: tokens until first occurrence of extracted **correct** answer in text (char-fraction estimate, not exact tokenizer positions). `-1` if wrong or substring missing. |
+| **`finish_commit`** | Binary proxy: answer text visible **before** first `\boxed` and `\boxed{}` parse succeeds (see docstring for limits). |
+| **`verification_spiral`** | Count of re-check phrases (wait / let me check / correction, etc.) in suffix after first predicted answer (or full generation fallback). |
+| **`loop_onset_tokens`** | Approximate token index where a problematic loop starts (min of streak / global-repeat triggers, same pipeline as `loop_detected`). `-1` if none or empty trace. |
+| **`actor_token_split`** | **`dict`** `actor_id → token count` per actor. |
+| **`total_generation_ms`** | Sum of **`total_ms`** over segments with `timing` — backend timings at example level. |
+| **`segment_timing_ms`** | **`dict`** `actor_id → total ms` for that actor’s segments. |
+| **`tokens_per_second`** | **`dict`** `actor_id → tok/s`: segment tokens / segment time (aggregated, not mean of per-segment rates). |
+| **`stop_token_probe`** | Placeholder for future EOS logit integration; currently fixed string (`StopTokenProbeMetric`). |
+
+**`timing.jsonl`** also stores coarse per-`actor_id` timing on save (`quantlab/runner.py` `_record_example`) — similar to **`segment_timing_ms`**, flat JSONL.
+
+### Timing from a live run
+
+- Each trace **segment** may carry **`timing`** (prefill/decode/total_ms, tokens/s) when vLLM returns `FinishedRequestStats` and matching succeeds.
+- **`timing.jsonl`** aggregates by `actor_id` per example.
+
+**Important for `staged_batch_size ≥ 2`:** multiple prompts share one batched vLLM call. Segment `timing` either uses **per-request vLLM stats** or, in the worst case, an **equal split of batch wall time** (see `VLLMBackend.generate_batch`). For **fair latency comparisons**, use standalone replay (one request at a time), not raw batched timing.
+
+### Replay timing on saved traces
 
 ```bash
 python scripts/replay_timing.py <run_id> --results-dir results -v
-# зафиксировать одну модель для всех сегментов:
+# pin one model for all segments:
 python scripts/replay_timing.py <run_id> --model-id Qwen/Qwen3-32B --precision bf16
 ```
 
-По умолчанию бэкенд подбирается по `actor_id` и `config.json` актёров. Результаты — в `results/<run_id>/timing_replay/*.json`.
+By default the backend follows `actor_id` and actor entries in `config.json`. Output: `results/<run_id>/timing_replay/*.json`.
 
 ---
 
-## Тесты
+## Tests
 
 ```bash
 pytest tests/ -q
@@ -272,17 +364,16 @@ pytest tests/ -q
 
 ---
 
-## Кратко: кому что смотреть
+## Quick reference
 
-| Задача | Куда смотреть |
-|--------|----------------|
-| Повторить hybrid MATH50 | `configs/experiments/math500_qwen_hybrid.yaml` + `--staged --max-examples 50` |
-| Сравнить с полным FP16 | `math500_qwen3_32b_fp16_plan_answer.yaml` |
-| Черновой throughput batched staged | `staged_batch_size` в YAML или `--staged-batch-size` |
-| Качество в одну цифру | **`summary.json`** — обычно **`accuracy`** и **`parse_rate`** по всему прогону |
-| Разбор по примеру | **`judgements.jsonl`** (`is_correct`, **`parse_success`**, предсказание и эталон) + строка того же **`example_id`** в **`metrics.jsonl`** |
-| Полный текст рассуждения | `traces.jsonl` → `segments` |
-| Изолированные замеры времени сегментов | `replay_timing.py` |
-| Отладка падений | `errors.jsonl`, хвост `nohup` лога |
-
-Если нужно расширить README (CUDA, версии vLLM, точные версии моделей HF) — лучше зафиксировать это в вашем окружении и дописать сюда отдельный подраздел «Рекомендуемое окружение».
+| Task | Where to look |
+|------|----------------|
+| Reproduce hybrid MATH-500 | `configs/final/math500/hybrid_fp16_gptq2bit.yaml` + `-v` |
+| Compare with full FP16 | `configs/final/math500/hybrid_fp16_fp16.yaml` |
+| Throughput / KV-cache | `scripts/bench_qwen_throughput.py`, *Throughput* section above |
+| Draft batched staged throughput | `staged_batch_size` in YAML or `--staged-batch-size` |
+| Quality in one number | **`summary.json`** — usually **`accuracy`** and **`parse_rate`** |
+| Per-example breakdown | **`judgements.jsonl`** + same **`example_id`** in **`metrics.jsonl`** |
+| Full reasoning text | `traces.jsonl` → `segments` |
+| Isolated segment timing | `replay_timing.py` |
+| Debug failures | `errors.jsonl`, tail of `nohup` log |
