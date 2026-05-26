@@ -22,6 +22,8 @@ class HandoffMode(str, Enum):
     PROMPT_PLAN_LABELED = "prompt_plan_labeled"
     #: ``trace.prompt`` with trailing think opener removed (no segments).
     PROMPT_WITHOUT_THINK = "prompt_without_think"
+    #: Plan segments injected into the user turn before ``stage_prompt`` (hybrid reason stage).
+    PROMPT_PLAN_IN_USER = "prompt_plan_in_user"
     KV_CACHE = "kv_cache"
 
 

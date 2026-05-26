@@ -153,6 +153,8 @@ class Trace:
                 + _strip_think_tags(generated)
                 + "\n"
             )
+        if mode == HandoffMode.PROMPT_PLAN_IN_USER:
+            return self._prompt_without_think_scaffold()
         return self.prompt + generated
 
     def _prompt_without_think_scaffold(self) -> str:
@@ -216,6 +218,15 @@ class Trace:
                 stage_system_prompt=stage_system_prompt,
                 stage_prompt=stage_prompt,
             )
+        if handoff_mode == HandoffMode.PROMPT_PLAN_IN_USER:
+            if stage_prompt_placement != StagePromptPlacement.USER_SUFFIX:
+                raise ValueError(
+                    "prompt_plan_in_user requires stage_prompt_placement=user_suffix"
+                )
+            segs = self.segments if segments is None else segments
+            generated = "".join(s.text for s in segs)
+            user_suffix = plan_label + _strip_think_tags(generated) + "\n\n" + stage_prompt
+            return self.inject_user_stage_prompt(self._prompt_without_think_scaffold(), user_suffix)
         prefix = self.handoff_prefix(
             handoff_mode,
             plan_label=plan_label,
