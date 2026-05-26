@@ -1,9 +1,59 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import time
 from typing import TYPE_CHECKING, Any, Optional
+
+
+def _collect_child_pids(root_pid: int) -> list[int]:
+    out: list[int] = []
+    try:
+        raw = open(f"/proc/{root_pid}/task/{root_pid}/children", encoding="utf-8").read()
+    except OSError:
+        return out
+    for part in raw.split():
+        if not part:
+            continue
+        try:
+            cid = int(part)
+        except ValueError:
+            continue
+        out.append(cid)
+        out.extend(_collect_child_pids(cid))
+    return out
+
+
+def _reap_vllm_subprocesses() -> None:
+    """vLLM V1 leaves EngineCore children alive after ``del LLM``; free VRAM for staged waves."""
+    me = os.getpid()
+    for pid in _collect_child_pids(me):
+        try:
+            comm = open(f"/proc/{pid}/comm", encoding="utf-8").read().strip()
+            cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\x00", b" ").decode(
+                "utf-8", errors="ignore"
+            )
+        except OSError:
+            continue
+        marker = f"{comm} {cmd}".lower()
+        if "vllm" not in marker and "enginecore" not in marker:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    time.sleep(2.0)
+    for pid in _collect_child_pids(me):
+        try:
+            comm = open(f"/proc/{pid}/comm", encoding="utf-8").read().strip()
+        except OSError:
+            continue
+        if "vllm" in comm.lower() or "enginecore" in comm.lower():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
 from quantlab.actors.backends.base import BackendBase
 from quantlab.core.types import GenerationParams, PrecisionMode, QuantizationMethod, TimingInfo
@@ -183,6 +233,7 @@ class VLLMBackend(BackendBase):
     def unload(self) -> None:
         del self._llm
         self._llm = None
+        _reap_vllm_subprocesses()
         try:
             import torch
             torch.cuda.empty_cache()

@@ -91,6 +91,9 @@ class _ProgressHeartbeat:
 def _unload_all_actors(actors: dict[str, Any]) -> None:
     for actor in actors.values():
         actor.unload()
+    from quantlab.actors.backends.vllm_backend import _reap_vllm_subprocesses
+
+    _reap_vllm_subprocesses()
 
 
 def _build_timing_data(trace: Trace) -> dict[str, Any]:

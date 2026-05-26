@@ -1,0 +1,66 @@
+experiment_name: final_piqa_single_fp16_32b
+description: 'PIQA validation (1838): FP16 single-stage. lm-eval Question + two solutions
+  in user; assistant opens <|redacted_thinking>.
+
+  '
+benchmark:
+  name: piqa
+  split: validation
+  max_examples: null
+  seed: 42
+staged_execution: true
+staged_unload_between_waves: false
+staged_batch_size: 500
+max_total_tokens: 32768
+actors:
+- actor_id: qwen3_32b_fp16
+  model_id: Qwen/Qwen3-32B
+  backend: vllm
+  precision: fp16
+  quantization: none
+  backend_kwargs:
+    cuda_visible_devices: '0'
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.82
+    max_model_len: 32768
+    enable_prefix_caching: true
+    enforce_eager: false
+  generation_params:
+    max_new_tokens: 30720
+    temperature: 0.6
+    seed: 42
+    stop_sequences:
+    - <|im_end|>
+    - <|endoftext|>
+pipeline:
+- actor_id: qwen3_32b_fp16
+  role: answer
+  handoff_mode: full_prefill
+  max_new_tokens: 30720
+  stage_prompt: ''
+  stage_assistant_suffix: '<think>
+
+    '
+  stop_sequences:
+  - <|im_end|>
+  - <|endoftext|>
+  exit_conditions: []
+metrics:
+- name: accuracy
+- name: parse_rate
+- name: exact_match
+- name: reasoning_length
+- name: think_closed
+- name: total_generation_ms
+- name: tokens_per_second
+output:
+  base_dir: results/final_qwen32b_fp16
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true
+  trace_include_llm_prompt: true
+  staged_wave_checkpoints: true
+wandb:
+  enabled: false

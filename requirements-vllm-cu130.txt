@@ -1,0 +1,53 @@
+# vLLM 0.21+ inference stack used for the perf / KV-cache experiments
+# (B200, driver supporting CUDA 12.9+).
+#
+# Installation:
+#   pip install -r requirements-vllm-cu130.txt
+#
+# Notes:
+#   - vLLM 0.21 brings NVFP4 KV cache support (`--kv-cache-dtype nvfp4`),
+#     missing in 0.20. Requires torch 2.11 + cu130 wheels.
+#   - libcudart.so.12 must be reachable at runtime; the helper script
+#     scripts/vllm_env.sh wires LD_LIBRARY_PATH for that.
+#   - For driver-bound CUDA 12.4 setups use requirements-vllm-cu124.txt
+#     instead (older vLLM 0.8.5; no nvfp4 KV).
+
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+
+vllm==0.21.0
+transformers==5.8.0
+tokenizers==0.22.2
+huggingface_hub==1.14.0
+safetensors==0.7.0
+sentencepiece==0.2.1
+accelerate==1.13.0
+compressed-tensors==0.15.0.1
+
+flashinfer-python==0.6.8.post1
+flashinfer-cubin==0.6.8.post1
+triton==3.6.0
+einops==0.8.2
+ninja==1.13.0
+
+# CUDA runtime libs bundled in the venv so vLLM can locate libcudart.so.12
+nvidia-cuda-runtime-cu12==12.9.79
+
+# Data / IO
+datasets==4.8.5
+pyarrow==24.0.0
+pandas==3.0.3
+numpy==2.3.5
+tqdm==4.67.3
+PyYAML==6.0.3
+pydantic==2.13.4
+
+# Math judge / answer parsing
+sympy==1.14.0
+latex2sympy2>=1.9.0
+word2number>=1.1
+math-verify[antlr4_13_2]>=0.7.0
+
+# Plotting (optional — only needed if you also pull in the plotting scripts)
+matplotlib==3.10.9

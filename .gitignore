@@ -18,17 +18,12 @@ htmlcov/
 # Локальные результаты: по умолчанию не версионируем
 /results/*
 !/results/README.md
-# Снапшоты успешных полных прогонов для сравнения (README в каталоге)
-!/results/20260512_011545_78d599/
-!/results/20260512_011545_78d599/**/*
-!/results/20260512_012442_a81368/
-!/results/20260512_012442_a81368/**/*
 runs/
 *.jsonl
 *.parquet
+!data/winogrande/**/*.parquet
+!data/piqa/**/*.parquet
 !tests/fixtures/*.jsonl
-!/results/20260512_011545_78d599/**/*.jsonl
-!/results/20260512_012442_a81368/**/*.jsonl
 
 *.safetensors
 *.bin
@@ -50,3 +45,10 @@ Thumbs.db
 
 wandb/
 .venv*/
+
+# Plotting scripts are regenerated locally from benchmark JSON artefacts.
+/scripts/plot_*.py
+/scripts/_monitor_*.sh
+
+# Temporary launch-time staging copies of configs (hard-coded GPU ids).
+/configs/_launch_staging_*

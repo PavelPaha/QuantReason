@@ -1,0 +1,23 @@
+# Инференс под драйвер с поддержкой до CUDA 12.4 (типично nvidia-smi: CUDA Version 12.4).
+# Сначала ставим PyTorch с колёсами cu124, затем vLLM, совместимый с torch 2.6
+# (свежие vllm 0.20+ тянут torch 2.11+cu13 и дают "driver too old").
+#
+# Установка:
+#   pip install -r requirements-vllm-cu124.txt
+# или:
+#   bash scripts/install_vllm_cuda124.sh
+
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+# До transformers 5.x: иначе vLLM 0.8.5 падает на Qwen2Tokenizer (нет all_special_tokens_extended).
+transformers>=4.51.0,<5
+vllm==0.8.5
+
+# Для MATH-500: sympy / latex2sympy2 в `_math_equal`; word2number + regex — парсер Qwen2.5-Math.
+# Для GSM8K: math-verify (parse/verify, \boxed{} + ExprExtractionConfig).
+sympy>=1.12
+latex2sympy2>=1.9.0
+word2number>=1.1
+math-verify[antlr4_13_2]>=0.7.0
