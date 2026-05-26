@@ -11,15 +11,18 @@ configs/math500/
 │   ├── single_gptq2bit.yaml
 │   └── hybrid_fp16_gptq2bit.yaml
 ├── qwen32b_nvfp4/                # Qwen3-32B NVFP4 weights, default KV cache
-│   └── single_nvfp4.yaml
+│   ├── single_nvfp4.yaml
+│   └── hybrid_fp16_nvfp4.yaml    # 32B FP16 plan → 32B NVFP4
 ├── qwen32b_nvfp4_kv4/            # Qwen3-32B NVFP4 + NVFP4 KV cache
-│   └── single_nvfp4_kv4.yaml
+│   ├── single_nvfp4_kv4.yaml
+│   └── hybrid_fp16_nvfp4_kv4.yaml
 ├── qwen8b_fp16/                  # Qwen3-8B FP16 baselines (paper comparison)
 │   ├── single_fp16.yaml
 │   └── hybrid_fp16_fp16.yaml
-├── qwen8b_nvfp4/                 # Qwen3-8B NVFP4 single + FP16→32B-NVFP4 hybrid
+├── qwen8b_nvfp4/                 # Qwen3-8B / 32B NVFP4 family
 │   ├── single_8b_nvfp4.yaml
-│   └── hybrid_fp16_nvfp4.yaml
+│   ├── hybrid_fp16_nvfp4.yaml    # 8B FP16 plan → 32B NVFP4
+│   └── hybrid_fp16_8b_nvfp4.yaml # 8B FP16 plan → 8B NVFP4
 └── qwen8b_moe35b_nvfp4/          # MoE 35B NVFP4 single + hybrid
     ├── single_moe35b_nvfp4.yaml
     └── hybrid_fp16_moe35b_nvfp4.yaml
@@ -29,10 +32,10 @@ configs/math500/
 |--------------|-------------|
 | `configs/<dataset>/qwen32b_fp16/` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
 | `configs/<dataset>/qwen32b_gptq2bit/` | GPTQ 2-bit single- and hybrid variants |
-| `configs/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4 weights, default KV (`results/final_qwen8b_nvfp4`) |
-| `configs/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 weights + NVFP4 KV cache |
+| `configs/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4 single + 32B FP16→32B-NVFP4 hybrid |
+| `configs/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 + NVFP4 KV single/hybrid |
 | `configs/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 single/hybrid baselines for NVFP4 paper sweeps |
-| `configs/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16 planner → 32B NVFP4 hybrid |
+| `configs/<dataset>/qwen8b_nvfp4/` | 8B NVFP4 single; hybrid 8B→32B-NVFP4 and 8B→8B-NVFP4 |
 | `configs/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + FP16 planner hybrid |
 
 Nine datasets: `aime2026`, `arc_challenge`, `arc_easy`, `gpqa_diamond`, `gsm8k`, `math500`, `piqa`, `strategyqa`, `winogrande`.
@@ -253,9 +256,11 @@ Same benchmark folders, different model stacks:
 ```bash
 # examples
 python scripts/run_experiment.py configs/math500/qwen8b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/math500/qwen32b_nvfp4/single_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_nvfp4/hybrid_fp16_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_nvfp4_kv4/hybrid_fp16_nvfp4_kv4.yaml -v
 python scripts/run_experiment.py configs/math500/qwen8b_nvfp4/single_8b_nvfp4.yaml -v
 python scripts/run_experiment.py configs/math500/qwen8b_nvfp4/hybrid_fp16_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen8b_nvfp4/hybrid_fp16_8b_nvfp4.yaml -v
 python scripts/run_experiment.py configs/math500/qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml -v
 python scripts/run_experiment.py configs/math500/qwen8b_moe35b_nvfp4/hybrid_fp16_moe35b_nvfp4.yaml -v
 ```

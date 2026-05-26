@@ -58,10 +58,10 @@ Everything lives under `configs/<dataset>/`:
 |------|------------|
 | `configs/<dataset>/qwen32b_fp16/*.yaml` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
 | `configs/<dataset>/qwen32b_gptq2bit/*.yaml` | GPTQ 2-bit single- and hybrid variants |
-| `configs/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4, default KV cache |
-| `configs/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 + NVFP4 KV at 32k |
+| `configs/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4 single + 32B FP16→32B-NVFP4 hybrid |
+| `configs/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 + NVFP4 KV single/hybrid |
 | `configs/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 baselines (NVFP4 paper comparison) |
-| `configs/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16→32B-NVFP4 hybrid |
+| `configs/<dataset>/qwen8b_nvfp4/` | 8B NVFP4 single; hybrid 8B→32B and 8B→8B NVFP4 |
 | `configs/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + hybrid |
 
 Regenerate the `configs/` YAMLs from templates:

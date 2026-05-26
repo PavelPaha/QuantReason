@@ -1,0 +1,123 @@
+experiment_name: final_gpqa_diamond_hybrid_fp16_nvfp4_kv4
+description: 'GPQA Diamond (198): FP16 plan → reasoning. Plan in user (prompt_plan_in_user).
+
+
+  FP16 Qwen3-32B plan → Qwen3-32B-NVFP4 reasoning (kv_cache_dtype=nvfp4).'
+benchmark:
+  name: gpqa
+  subset: gpqa_diamond
+  split: train
+  max_examples: null
+  seed: 42
+staged_execution: true
+staged_unload_between_waves: true
+staged_batch_size: 500
+max_total_tokens: 32768
+actors:
+- actor_id: qwen3_32b_fp16_plan
+  model_id: Qwen/Qwen3-32B
+  backend: vllm
+  precision: fp16
+  quantization: none
+  backend_kwargs:
+    cuda_visible_devices: '0'
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.9
+    max_model_len: 32768
+    enable_prefix_caching: true
+    enforce_eager: false
+  generation_params:
+    max_new_tokens: 1024
+    temperature: 0.6
+    seed: 42
+    stop_sequences:
+    - <|im_end|>
+    - <|endoftext|>
+- actor_id: qwen3_32b_nvfp4
+  model_id: RedHatAI/Qwen3-32B-NVFP4
+  backend: vllm
+  precision: bf16
+  quantization: none
+  backend_kwargs:
+    cuda_visible_devices: '5'
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.8
+    max_model_len: 32768
+    enable_prefix_caching: true
+    enforce_eager: false
+    kv_cache_dtype: nvfp4
+  generation_params:
+    max_new_tokens: 30720
+    temperature: 0.6
+    seed: 42
+    stop_sequences:
+    - <|im_end|>
+    - <|endoftext|>
+pipeline:
+- actor_id: qwen3_32b_fp16_plan
+  role: plan
+  handoff_mode: prompt_without_think
+  stage_prompt_placement: plan_scaffold
+  max_new_tokens: 1024
+  exclude_stage_prompt_from_trace: true
+  stop_sequences:
+  - '[PLAN_FINISH]'
+  - PLAN_FINISH
+  stage_system_prompt: 'You are a careful reasoning assistant. Produce only a concise solution plan.
+
+    Do not solve the problem fully. Write only a concise plan with 3-6 short bullet points or numbered steps.
+
+    Do not give the final answer or letter choice (A/B/C/D), and stop immediately after the plan.'
+  stage_prompt: Return only the plan. No final answer.
+  exit_conditions:
+  - name: after_marker
+    kwargs:
+      marker: '[PLAN_FINISH]'
+      keep_marker: true
+  - name: after_n_tokens
+    kwargs:
+      n: 1024
+- actor_id: qwen3_32b_nvfp4
+  role: reasoning
+  handoff_mode: prompt_plan_in_user
+  handoff_plan_label: 'Plan:
+
+    '
+  stage_prompt_placement: user_suffix
+  max_new_tokens: 30720
+  stage_prompt: Solve the problem using the plan above and give the final answer in \boxed{}.
+  stage_assistant_suffix: '<think>
+
+    '
+  stop_sequences:
+  - <|im_end|>
+  - <|endoftext|>
+  exit_conditions: []
+metrics:
+- name: accuracy
+- name: parse_rate
+- name: exact_match
+- name: reasoning_length
+- name: loop_detected
+- name: loop_onset_tokens
+- name: think_closed
+- name: commit_gap
+- name: tokens_to_first_correct
+- name: finish_commit
+- name: verification_spiral
+- name: stop_token_probe
+- name: actor_token_split
+- name: total_generation_ms
+- name: segment_timing_ms
+- name: tokens_per_second
+output:
+  base_dir: results/final_qwen32b_nvfp4_kv4
+  save_traces: true
+  save_raw_generations: true
+  save_timing: true
+  save_errors: true
+  parquet_summary: true
+  trace_include_llm_prompt: true
+  staged_wave_checkpoints: true
+wandb:
+  enabled: false
