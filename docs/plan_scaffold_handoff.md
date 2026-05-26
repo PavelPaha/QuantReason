@@ -64,13 +64,13 @@ python scripts/dry_run_staged_prompts.py
 ## Запуск smoke (1 пример)
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml --staged -v --max-examples 1
+python scripts/run_experiment.py configs/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml --staged -v --max-examples 1
 ```
 
 ## Full MATH-500 hybrid run
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml --staged -v
+python scripts/run_experiment.py configs/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml --staged -v
 ```
 
 Промпты смотреть в `traces.jsonl` → `segments[].llm_prompt_full` (нужен `trace_include_llm_prompt: true`).

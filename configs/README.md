@@ -1,9 +1,9 @@
-# Final experiment configs
+# Experiment configs
 
-All reproduction YAMLs live under `configs/final/<dataset>/`:
+All reproduction YAMLs live under `configs/<dataset>/`:
 
 ```
-configs/final/math500/
+configs/math500/
 ├── qwen32b_fp16/                 # Qwen3-32B FP16 (single + hybrid FP16→FP16)
 │   ├── single_fp16.yaml
 │   └── hybrid_fp16_fp16.yaml
@@ -27,13 +27,13 @@ configs/final/math500/
 
 | Path pattern | Description |
 |--------------|-------------|
-| `configs/final/<dataset>/qwen32b_fp16/` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
-| `configs/final/<dataset>/qwen32b_gptq2bit/` | GPTQ 2-bit single- and hybrid variants |
-| `configs/final/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4 weights, default KV (`results/final_qwen8b_nvfp4`) |
-| `configs/final/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 weights + NVFP4 KV cache |
-| `configs/final/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 single/hybrid baselines for NVFP4 paper sweeps |
-| `configs/final/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16 planner → 32B NVFP4 hybrid |
-| `configs/final/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + FP16 planner hybrid |
+| `configs/<dataset>/qwen32b_fp16/` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
+| `configs/<dataset>/qwen32b_gptq2bit/` | GPTQ 2-bit single- and hybrid variants |
+| `configs/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4 weights, default KV (`results/final_qwen8b_nvfp4`) |
+| `configs/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 weights + NVFP4 KV cache |
+| `configs/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 single/hybrid baselines for NVFP4 paper sweeps |
+| `configs/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16 planner → 32B NVFP4 hybrid |
+| `configs/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + FP16 planner hybrid |
 
 Nine datasets: `aime2026`, `arc_challenge`, `arc_easy`, `gpqa_diamond`, `gsm8k`, `math500`, `piqa`, `strategyqa`, `winogrande`.
 
@@ -120,15 +120,15 @@ Built-in comparison pair (32B NVFP4, same model, different KV):
 
 To try another dtype on an existing config, add or change `kv_cache_dtype` under the relevant actor's `backend_kwargs` (or copy the YAML to a new variant name).
 
-For **throughput** sweeps across KV dtypes, use `scripts/bench_qwen_throughput.py --kv-cache-dtype …` — see the root [README](../../README.md#throughput--kv-cache-benchmarks).
+For **throughput** sweeps across KV dtypes, use `scripts/bench_qwen_throughput.py --kv-cache-dtype …` — see the root [README](../README.md#throughput--kv-cache-benchmarks).
 
 ## Running one config
 
 From the repo root:
 
 ```bash
-python scripts/run_experiment.py configs/final/<dataset>/qwen32b_fp16/<variant>.yaml -v
-python scripts/run_experiment.py configs/final/<dataset>/qwen32b_gptq2bit/<variant>.yaml -v
+python scripts/run_experiment.py configs/<dataset>/qwen32b_fp16/<variant>.yaml -v
+python scripts/run_experiment.py configs/<dataset>/qwen32b_gptq2bit/<variant>.yaml -v
 ```
 
 Useful flags:
@@ -151,82 +151,82 @@ Set GPUs in the YAMLs first. Paths are relative to the repo root.
 ### GSM8K
 
 ```bash
-python scripts/run_experiment.py configs/final/gsm8k/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gsm8k/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/gsm8k/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gsm8k/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/gsm8k/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/gsm8k/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/gsm8k/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/gsm8k/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### MATH-500
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### AIME-2026
 
 ```bash
-python scripts/run_experiment.py configs/final/aime2026/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/aime2026/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/aime2026/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/aime2026/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/aime2026/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/aime2026/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/aime2026/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/aime2026/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### ARC-Easy
 
 ```bash
-python scripts/run_experiment.py configs/final/arc_easy/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/arc_easy/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/arc_easy/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/arc_easy/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/arc_easy/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/arc_easy/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/arc_easy/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/arc_easy/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### ARC-Challenge
 
 ```bash
-python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/arc_challenge/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/arc_challenge/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/arc_challenge/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/arc_challenge/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/arc_challenge/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### GPQA Diamond
 
 ```bash
-python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/gpqa_diamond/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/gpqa_diamond/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/gpqa_diamond/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/gpqa_diamond/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/gpqa_diamond/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### StrategyQA
 
 ```bash
-python scripts/run_experiment.py configs/final/strategyqa/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/strategyqa/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/strategyqa/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/strategyqa/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/strategyqa/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/strategyqa/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/strategyqa/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/strategyqa/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### WinoGrande
 
 ```bash
-python scripts/run_experiment.py configs/final/winogrande/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/winogrande/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/winogrande/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/winogrande/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/winogrande/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/winogrande/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/winogrande/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/winogrande/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ### PIQA
 
 ```bash
-python scripts/run_experiment.py configs/final/piqa/qwen32b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/piqa/qwen32b_gptq2bit/single_gptq2bit.yaml -v
-python scripts/run_experiment.py configs/final/piqa/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/piqa/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/piqa/qwen32b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/piqa/qwen32b_gptq2bit/single_gptq2bit.yaml -v
+python scripts/run_experiment.py configs/piqa/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/piqa/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml -v
 ```
 
 ---
@@ -252,12 +252,12 @@ Same benchmark folders, different model stacks:
 
 ```bash
 # examples
-python scripts/run_experiment.py configs/final/math500/qwen8b_fp16/single_fp16.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen32b_nvfp4/single_nvfp4.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen8b_nvfp4/single_8b_nvfp4.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen8b_nvfp4/hybrid_fp16_nvfp4.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen8b_moe35b_nvfp4/hybrid_fp16_moe35b_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen8b_fp16/single_fp16.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_nvfp4/single_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen8b_nvfp4/single_8b_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen8b_nvfp4/hybrid_fp16_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen8b_moe35b_nvfp4/hybrid_fp16_moe35b_nvfp4.yaml -v
 ```
 
-See the root [README](../../README.md) for environment setup and throughput benchmarks.
+See the root [README](../README.md) for environment setup and throughput benchmarks.

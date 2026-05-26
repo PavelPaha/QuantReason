@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Generate configs/final/*.yaml — 4 configs per dataset."""
+"""Generate configs/*.yaml — 4 configs per dataset."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "configs" / "final"
+ROOT = Path(__file__).resolve().parents[1] / "configs"
 
 GPU = "0"
 TP = 1

@@ -52,19 +52,19 @@ Before editing YAMLs, set `actors[].backend_kwargs.cuda_visible_devices` to your
 
 ### Config layout
 
-Everything lives under `configs/final/<dataset>/`:
+Everything lives under `configs/<dataset>/`:
 
 | Path | What it is |
 |------|------------|
-| `configs/final/<dataset>/qwen32b_fp16/*.yaml` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
-| `configs/final/<dataset>/qwen32b_gptq2bit/*.yaml` | GPTQ 2-bit single- and hybrid variants |
-| `configs/final/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4, default KV cache |
-| `configs/final/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 + NVFP4 KV at 32k |
-| `configs/final/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 baselines (NVFP4 paper comparison) |
-| `configs/final/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16→32B-NVFP4 hybrid |
-| `configs/final/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + hybrid |
+| `configs/<dataset>/qwen32b_fp16/*.yaml` | Qwen3-32B FP16 single- and hybrid-FP16 variants |
+| `configs/<dataset>/qwen32b_gptq2bit/*.yaml` | GPTQ 2-bit single- and hybrid variants |
+| `configs/<dataset>/qwen32b_nvfp4/` | Qwen3-32B NVFP4, default KV cache |
+| `configs/<dataset>/qwen32b_nvfp4_kv4/` | Qwen3-32B NVFP4 + NVFP4 KV at 32k |
+| `configs/<dataset>/qwen8b_fp16/` | Qwen3-8B FP16 baselines (NVFP4 paper comparison) |
+| `configs/<dataset>/qwen8b_nvfp4/` | Qwen3-8B NVFP4 single + FP16→32B-NVFP4 hybrid |
+| `configs/<dataset>/qwen8b_moe35b_nvfp4/` | Qwen3.6-35B MoE NVFP4 single + hybrid |
 
-Regenerate the `configs/final/` YAMLs from templates:
+Regenerate the `configs/` YAMLs from templates:
 
 ```bash
 python scripts/generate_final_configs.py
@@ -89,8 +89,8 @@ python scripts/prepare_strategyqa_data.py
 Single config:
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
-python scripts/run_experiment.py configs/final/math500/qwen8b_nvfp4/hybrid_fp16_nvfp4.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/math500/qwen8b_nvfp4/hybrid_fp16_nvfp4.yaml -v
 ```
 
 Artifacts land in `results/<category>/<run_id>/` (`traces.jsonl`, `judgements.jsonl`, `summary.json`, …).
@@ -111,7 +111,7 @@ actors:
 
 Values: `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`, `nvfp4` (requires vLLM 0.21+). In hybrid configs you can set it independently on the plan and reason actors.
 
-Ready-made pair for 32B NVFP4: `qwen32b_nvfp4/single_nvfp4.yaml` (default KV) vs `qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml` (`kv_cache_dtype: nvfp4`). Details and examples: [configs/final/README.md](configs/final/README.md#kv-cache-dtype-accuracy-runs).
+Ready-made pair for 32B NVFP4: `qwen32b_nvfp4/single_nvfp4.yaml` (default KV) vs `qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml` (`kv_cache_dtype: nvfp4`). Details and examples: [configs/README.md](configs/README.md#kv-cache-dtype-accuracy-runs).
 
 ### Throughput / KV-cache benchmarks
 
@@ -165,8 +165,8 @@ MoE models need bf16 weights under vLLM's FlashInfer backend — don't flip thei
 
 These modes were used in real runs, not just defined in code:
 
-- **MATH-500 hybrid pipeline** (`configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml`): plan on **full BF16 Qwen3-32B**, answer on **2-bit GPTQ** via vLLM; **staged** (plan all examples, then answers), trace/metric persistence, optional resume from wave checkpoints.
-- **Same tasks, full FP16** (`configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml`): both stages on one FP16 model for comparison with hybrid.
+- **MATH-500 hybrid pipeline** (`configs/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml`): plan on **full BF16 Qwen3-32B**, answer on **2-bit GPTQ** via vLLM; **staged** (plan all examples, then answers), trace/metric persistence, optional resume from wave checkpoints.
+- **Same tasks, full FP16** (`configs/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml`): both stages on one FP16 model for comparison with hybrid.
 - **Timing from saved traces**: `scripts/replay_timing.py` re-runs segments through vLLM (pin one model or follow `actor_id` from config).
 - On shared-GPU vLLM setups, use reasonable `gpu_memory_utilization` and a working `PATH` (including `ninja` for FlashInfer JIT under `nohup`).
 
@@ -214,7 +214,7 @@ Upload a finished run from saved artifacts:
 python scripts/log_saved_run_to_wandb.py results/<run_id> --project quantlab
 # or reuse wandb settings from a YAML:
 python scripts/log_saved_run_to_wandb.py results/<run_id> \
-  --wandb-config configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml
+  --wandb-config configs/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml
 ```
 
 ---
@@ -222,7 +222,7 @@ python scripts/log_saved_run_to_wandb.py results/<run_id> \
 ## Running an experiment from YAML
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
+python scripts/run_experiment.py configs/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml -v
 ```
 
 Useful flags:
@@ -240,7 +240,7 @@ Useful flags:
 Limited staged run example:
 
 ```bash
-python scripts/run_experiment.py configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml \
+python scripts/run_experiment.py configs/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml \
   --staged -v --max-examples 50
 ```
 
@@ -303,7 +303,7 @@ Standalone replay writes per-segment results to `timing_replay/<example_id>.json
 
 ## Pipelines and configs
 
-Canonical reproduction configs live under **`configs/final/`** (see *Running the experiments* above).
+Canonical reproduction configs live under **`configs/`** (see *Running the experiments* above).
 
 Schema: **`quantlab/config/schema.py`** (`ExperimentConfig`, `StageConfig`, `ActorDef`, `OutputConfig`).
 
@@ -386,8 +386,8 @@ pytest tests/ -q
 
 | Task | Where to look |
 |------|----------------|
-| Reproduce hybrid MATH-500 | `configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml` + `-v` |
-| Compare with full FP16 | `configs/final/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml` |
+| Reproduce hybrid MATH-500 | `configs/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml` + `-v` |
+| Compare with full FP16 | `configs/math500/qwen32b_fp16/hybrid_fp16_fp16.yaml` |
 | Throughput / KV-cache | `scripts/bench_qwen_throughput.py`, *Throughput* section above |
 | Draft batched staged throughput | `staged_batch_size` in YAML or `--staged-batch-size` |
 | Quality in one number | **`summary.json`** — usually **`accuracy`** and **`parse_rate`** |

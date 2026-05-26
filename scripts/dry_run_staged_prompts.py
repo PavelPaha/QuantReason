@@ -63,7 +63,7 @@ class EchoActor(ActorBase):
 
 
 def main() -> None:
-    cfg_path = "configs/final/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml"
+    cfg_path = "configs/math500/qwen32b_gptq2bit/hybrid_fp16_gptq2bit.yaml"
     config = ExperimentConfig.model_validate(yaml.safe_load(open(cfg_path)))
     adapter = BenchmarkRegistry.build(config.benchmark.name, benchmark=config.benchmark)
     example = adapter.load(split="test", max_examples=1, seed=42)[0]
