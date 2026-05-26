@@ -111,7 +111,7 @@ actors:
 
 Values: `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`, `nvfp4` (requires vLLM 0.21+). In hybrid configs you can set it independently on the plan and reason actors.
 
-Ready-made pair for 32B NVFP4: `qwen32b_nvfp4/single_nvfp4.yaml` (default KV) vs `qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml` (`kv_cache_dtype: nvfp4`). Details and examples: [configs/README.md](configs/README.md#kv-cache-dtype-accuracy-runs).
+Ready-made pair for 32B NVFP4: `qwen32b_nvfp4/single_nvfp4.yaml` (default KV) vs `qwen32b_nvfp4_kv4/single_nvfp4_kv4.yaml` (`kv_cache_dtype: nvfp4`).
 
 ### Throughput / KV-cache benchmarks
 
