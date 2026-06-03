@@ -2,11 +2,7 @@
 
 <h3>Extreme Low-Bit Inference in Reasoning Models:<br/>Failure Modes and Targeted Recovery</h3>
 
-[![EMNLP](https://img.shields.io/badge/EMNLP-2026%20Submission-blue.svg)](https://2026.emnlp.org/) [![Code](https://img.shields.io/badge/Code-QuantReason-green.svg)](https://github.com/PavelPaha/QuantReason)
-
 <br/>
-
-**Official repository for the EMNLP 2026 submission *QuantReason*.**
 
 </div>
 
